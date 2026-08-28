@@ -39,4 +39,20 @@ command -v magick >/dev/null || { echo "ImageMagick (magick) is required to draw
 fc-list 2>/dev/null | grep -qi "emoji" || \
   echo "warning: no emoji font found — the tiles will come out blank. Install noto-fonts-emoji." >&2
 
-exec "$here/bin/build-variants" "$@"
+# td-tint is how a single terminal gets its own identity without moving the
+# whole desktop. Put it somewhere the shell can find it.
+bindir="$HOME/.local/bin"
+mkdir -p "$bindir"
+ln -sfn "$here/bin/td-tint" "$bindir/td-tint"
+echo "installed $bindir/td-tint"
+
+"$here/bin/build-variants" "$@"
+
+cat <<'TIP'
+
+Tint one terminal without touching the others:
+
+  td-tint            pick from the set
+  td-tint cherry     this terminal is now the cherry one
+  td-tint --clear    back to the desktop theme
+TIP

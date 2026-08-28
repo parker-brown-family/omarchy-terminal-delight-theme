@@ -352,6 +352,8 @@ def main():
         (theme / "hyprland.lua").write_text(hyprland_lua(key, v, p))
         shutil.copy2(REPO / "crt-glass.frag", theme / "crt-glass.frag")
         shutil.copy2(REPO / "icons.theme", theme / "icons.theme")
+        # td-tint reads this to label the terminal it just tinted
+        (theme / "glyph").write_text(v["glyph"] + "\n")
         shutil.copy2(repo_previews / f"{key}.png", theme / "preview.png")
 
         # the base background, pulled toward the variant's hue

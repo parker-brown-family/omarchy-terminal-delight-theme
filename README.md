@@ -133,6 +133,34 @@ the base in every variant, so code stays readable wherever you are. The slots
 Terminal Delight uses as its signature pair, the greens and cyans, are where
 the variant's hue lands. That is the part you see without looking.
 
+### One terminal at a time — `td-tint`
+
+An Omarchy theme is global by design. Switching it repaints every terminal at
+once, which is the exact opposite of being able to tell them apart. So the
+variants come with a second, smaller tool that changes **one terminal and
+nothing else**:
+
+```bash
+td-tint            # pick from the set
+td-tint cherry     # this terminal is now the cherry one
+td-tint --clear    # back to whatever the desktop theme says
+```
+
+It writes that variant's OSC palette down the terminal's own tty, and sets
+the border colour as a property on that terminal's own window. Both are
+runtime-only: nothing is written to disk, there is no state to clean up, and
+the tint dies with the window. The desktop theme is never touched, so you can
+run nine differently-coloured terminals side by side on one theme — text,
+ANSI ramp and window border all matching.
+
+The window it recolours is found by walking up `/proc` from the calling shell
+until a pid matches a Hyprland client, so it works from inside tmux and from
+a script, not only from the shell you are typing in.
+
+Terminal Delight itself is not the target here — it renders its own palette
+and has a per-pane colour tray for the same job. `td-tint` is for foot,
+Alacritty, Ghostty, kitty: anything that honours OSC 4/10/11.
+
 ### Why the variants are built, not shipped
 
 `omarchy-theme-set` only strips Lua from a theme carrying its own `.git`
@@ -158,6 +186,7 @@ rather than in any theme:
 | `install-curve.sh` | the opt-in installer for what the drop takes away |
 | `variants.toml` | the variant set: six keys each, the only file you edit |
 | `bin/build-variants` | derives a full theme from those six keys, and draws the tile |
+| `bin/td-tint` | tint one terminal — text and border — without touching the theme |
 | `install-variants.sh` | builds every variant into `~/.config/omarchy/themes/` |
 | `previews/` | the tiles, as the theme grid shows them |
 

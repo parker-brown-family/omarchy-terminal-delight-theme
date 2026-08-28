@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Tint THIS terminal — text and window border — without touching any other one.
+#
+#   td-tint              pick from the set
+#   td-tint cherry       this terminal is now the cherry one
+#   td-tint --clear      back to whatever the desktop theme says
+#   td-tint --list       what is installed
+#
+# An Omarchy theme is global by design: switching it repaints every terminal
+# at once, which is the opposite of being able to tell them apart. So this
+# does not touch the theme. It writes the variant's OSC palette to this
+# terminal's own tty, and sets the border colour as a property on this
+# terminal's own window. Both are runtime-only — nothing is written to disk,
+# nothing to clean up, and the tint dies with the window.
+#
+# Needs the variants installed (./install-variants.sh).
+set -euo pipefail
+
+THEMES="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/themes"
+PREFIX="terminal-delight-"
+CURRENT="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme/colors.toml"
+
+die() { echo "td-tint: $*" >&2; exit 1; }
+
+variants() {
+  local d
+  for d in "$THEMES/$PREFIX"*/; do
+    [[ -d $d ]] || continue
+    basename "$d" | sed "s/^$PREFIX//"
+  done
+}
+
+glyph_of() {
+  local g="$THEMES/$PREFIX$1/glyph"
+  [[ -f $g ]] && tr -d '\n' <"$g" || printf '•'
+}
+
+# The tty to repaint: this shell's own terminal.
+this_tty() {
+  local t
+  t=$(tty 2>/dev/null) && [[ $t == /dev/pts/* ]] && { echo "$t"; return; }
+  t=$(readlink /proc/self/fd/1 2>/dev/null) || true
+  [[ $t == /dev/pts/* ]] && echo "$t"
+}
+
+# The Hyprland window to recolour: the one whose process is an ancestor of
+# this shell. Falls back to the focused window, which is the same thing when
+# you are typing this yourself.
+this_window() {
+  command -v hyprctl >/dev/null || return 0
+  hyprctl clients -j 2>/dev/null | python3 -c '
+import json, os, sys
+
+def ancestors(pid):
+    seen = []
+    while pid and pid > 1:
+        seen.append(pid)
+        try:
+            with open(f"/proc/{pid}/status") as f:
+                for line in f:
+                    if line.startswith("PPid:"):
+                        pid = int(line.split()[1])
+                        break
+                else:
+                    break
+        except OSError:
+            break
+    return seen
+
+chain = ancestors(os.getppid())
+owners = {c["pid"]: c["address"] for c in json.load(sys.stdin) if c.get("pid")}
+for pid in chain:
+    if pid in owners:
+        print(owners[pid])
+        break
+' 2>/dev/null
+}
+
+set_border() {
+  local addr="$1" value="$2" prop
+  [[ -n $addr ]] || return 0
+  for prop in active_border_color inactive_border_color; do
+    hyprctl dispatch \
+      "hl.dsp.window.set_prop({ prop = \"$prop\", value = \"$value\", window = \"address:$addr\" })" \
+      >/dev/null 2>&1 || true
+  done
+}
+
+case "${1:-}" in
+--list)
+  for v in $(variants); do printf '  %s  %s\n' "$(glyph_of "$v")" "$v"; done
+  exit 0
+  ;;
+--clear)
+  tty=$(this_tty) || true
+  [[ -n ${tty:-} && -f $CURRENT ]] && omarchy-theme-osc "$CURRENT" >"$tty"
+  addr=$(this_window) || true
+  if [[ -n ${addr:-} ]]; then
+    for prop in active_border_color inactive_border_color; do
+      hyprctl dispatch \
+        "hl.dsp.window.set_prop({ prop = \"$prop\", value = \"unset\", window = \"address:$addr\" })" \
+        >/dev/null 2>&1 || true
+    done
+  fi
+  echo "cleared — this terminal follows the desktop theme again."
+  exit 0
+  ;;
+esac
+
+variant="${1:-}"
+
+if [[ -z $variant ]]; then
+  command -v gum >/dev/null || die "give a variant, or install gum for the picker. td-tint --list"
+  variant=$(for v in $(variants); do printf '%s %s\n' "$(glyph_of "$v")" "$v"; done |
+    gum filter --placeholder="which terminal is this?" --height=12) || exit 0
+  variant=${variant##* }
+fi
+
+theme="$THEMES/$PREFIX$variant"
+[[ -d $theme ]] || die "no variant '$variant'. Try: td-tint --list"
+colors="$theme/colors.toml"
+[[ -f $colors ]] || die "$colors is missing — re-run ./install-variants.sh"
+
+# 1. the text: this terminal's own palette, straight down its own tty
+tty=$(this_tty) || true
+[[ -n ${tty:-} ]] || die "not attached to a terminal."
+omarchy-theme-osc "$colors" >"$tty"
+
+# 2. the frame: this window's own border, so it reads while unfocused too
+accent=$(omarchy-theme-color --file "$colors" accent)
+partner=$(omarchy-theme-color --file "$colors" bright_cyan "$accent")
+addr=$(this_window) || true
+set_border "${addr:-}" "rgba(${accent#\#}ee) rgba(${partner#\#}ee) 45deg"
+
+printf '%s  this terminal is %s\n' "$(glyph_of "$variant")" "$variant"
