@@ -161,6 +161,29 @@ Terminal Delight itself is not the target here — it renders its own palette
 and has a per-pane colour tray for the same job. `td-tint` is for foot,
 Alacritty, Ghostty, kitty: anything that honours OSC 4/10/11.
 
+### One pane at a time — the paint overlay
+
+Terminal Delight goes a level deeper than a window: its unit is the pane. On a
+build carrying the control socket (`feat/td-paint-mode` and later), the variant
+idea becomes a mode you raise from the Omarchy bar — the
+`brownfamilysports.td-palette` widget (incubating on
+[omarchy-contrib's `lab` branch](https://github.com/parker-brown-family/omarchy-contrib/tree/lab))
+puts a 🎨 in the tray. Click it and every Terminal Delight pane on the active
+workspace overlays a glyph grid of the terminal's own colour sets — 🦇 ☢ 🤡 🌊
+and family, the same vocabulary these variants sample from. Click a glyph on a
+pane and that one pane takes the palette; scanlines, curvature and grade stay
+exactly as its theme set them, and the pick persists in the terminal's own
+per-pane state.
+
+```bash
+terminal-delight ctl paint toggle       # this workspace's terminals
+terminal-delight ctl paint off --all    # done painting, everywhere
+```
+
+`td-tint` keeps its lane: OSC terminals, one window at a time, runtime-only.
+The paint overlay is the same instinct, native to the terminal this theme is
+sampled from.
+
 ### Why the variants are built, not shipped
 
 `omarchy-theme-set` only strips Lua from a theme carrying its own `.git`
