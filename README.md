@@ -69,6 +69,83 @@ Three things worth knowing before you install it:
   theme pins its window class to `rounding = 0` — otherwise it gets bent
   twice.
 
+## Nine terminals you can tell apart
+
+![the variant set](previews/gallery.png)
+
+A wall of terminals that all look the same is a wall of terminals you have to
+read to navigate. So the theme ships a set: one glyph, one hue, one identity
+each.
+
+```bash
+./install-variants.sh
+```
+
+Then open Omarchy's own theme grid and click one:
+
+```
+Super + Shift + Ctrl + Space
+```
+
+That grid is already an image picker with labelled thumbnails, so there is no
+second UI to build and nothing new to learn — the variants just show up in it,
+clustered together under `Terminal Delight …`, each wearing its glyph.
+
+| | Variant | Reads as |
+|---|---|---|
+| 🪵 | wood | warm oak, the quiet one |
+| ☢️ | radioactive | acid green, impossible to miss |
+| 🦇 | bat | violet dusk |
+| 🍍 | pineapple | gold with a green leaf |
+| 🪖 | soldier | olive drab, muted on purpose |
+| 🔥 | ember | forge red |
+| ❄️ | glacier | ice cyan |
+| 🌊 | tide | deep cobalt |
+| 🍒 | cherry | rose crimson |
+
+Remove them again with `./install-variants.sh --uninstall`. The base theme is
+left alone.
+
+### The config surface is one file
+
+[`variants.toml`](variants.toml) is the whole thing. Six keys per variant —
+glyph, accent, accent_bright, foreground, background, surface — and
+`bin/build-variants` derives the rest: the full 26-key palette, the foreground
+ramp, the background steps, the window border gradient, the tinted wallpaper
+and the tile.
+
+```toml
+[cherry]
+glyph         = "🍒"
+accent        = "#F43C7A"
+accent_bright = "#F49CC8"
+foreground    = "#C7A9B4"
+background    = "#0A0407"
+surface       = "#220C16"
+```
+
+Copy a block, change the colours, re-run the installer. There is no colour
+wheel and no live editor, because the thing editing this is usually an agent,
+and an agent would rather write six hex values than drag a pip.
+
+The semantic ANSI colours — red, yellow, orange, magenta — are inherited from
+the base in every variant, so code stays readable wherever you are. The slots
+Terminal Delight uses as its signature pair, the greens and cyans, are where
+the variant's hue lands. That is the part you see without looking.
+
+### Why the variants are built, not shipped
+
+`omarchy-theme-set` only strips Lua from a theme carrying its own `.git`
+(`omarchy-theme-set:207`). A variant generated on your machine has none — so
+it keeps its `hyprland.lua`, and the rounding, blur and screen shader come
+with it. **Every variant is curved out of the box.** Only the per-window warp
+is still a separate step, because those shaders live in Hyprland's config
+rather than in any theme:
+
+```bash
+./install-curve.sh    # once, then log out and back in
+```
+
 ## Files
 
 | File | What |
@@ -79,6 +156,10 @@ Three things worth knowing before you install it:
 | `shaders/surface.frag`, `shaders/ext.frag` | the per-window warp |
 | `hyprland.lua` | rounding, blur, borders, screen shader. Applied if you copy this theme into `~/.config/omarchy/themes/` by hand; dropped if you install it from this repo |
 | `install-curve.sh` | the opt-in installer for what the drop takes away |
+| `variants.toml` | the variant set: six keys each, the only file you edit |
+| `bin/build-variants` | derives a full theme from those six keys, and draws the tile |
+| `install-variants.sh` | builds every variant into `~/.config/omarchy/themes/` |
+| `previews/` | the tiles, as the theme grid shows them |
 
 Copying the directory into `~/.config/omarchy/themes/terminal-delight/`
 yourself keeps all of it, `hyprland.lua` included — a theme you wrote stays

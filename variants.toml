@@ -1,0 +1,91 @@
+# Terminal Delight — the variant set.
+#
+# One glyph, one hue, one terminal you can pick out of a wall of terminals.
+# Each entry below becomes a full Omarchy theme in ~/.config/omarchy/themes/
+# named `terminal-delight-<key>`, so Omarchy's own theme grid
+# (Super + Shift + Ctrl + Space) is the picker. No new UI, one click.
+#
+# Six keys per variant is the whole surface. Everything else — the ANSI
+# palette, the darker/lighter background steps, the foreground ramp, the
+# window border gradient — is derived from these by bin/build-variants.
+# Add a variant by copying a block and changing the colours; re-run
+# ./install-variants.sh.
+#
+#   glyph          the tile face. Any emoji your system renders.
+#   accent         the core hue: borders, prompt, bar, highlights
+#   accent_bright  the gradient partner the active border runs to
+#   foreground     body text — a phosphor in the variant's hue
+#   background     the void. Near-black, tinted toward the hue
+#   surface        raised panels and selections
+
+[wood]
+glyph         = "🪵"
+accent        = "#C98F4A"
+accent_bright = "#E8C07A"
+foreground    = "#C3B49A"
+background    = "#0A0705"
+surface       = "#1A1310"
+
+[radioactive]
+glyph         = "☢️"
+accent        = "#C6F416"
+accent_bright = "#7CFF3F"
+foreground    = "#C0C9A8"
+background    = "#050803"
+surface       = "#14200A"
+
+[bat]
+glyph         = "🦇"
+accent        = "#9A6BF4"
+accent_bright = "#D46BF4"
+foreground    = "#B3AECB"
+background    = "#06040A"
+surface       = "#16112A"
+
+[pineapple]
+glyph         = "🍍"
+accent        = "#F4C31E"
+accent_bright = "#67F454"
+foreground    = "#C9C0A0"
+background    = "#0A0803"
+surface       = "#1F1808"
+
+[soldier]
+glyph         = "🪖"
+accent        = "#93A45F"
+accent_bright = "#D2C28C"
+foreground    = "#B3B69E"
+background    = "#060705"
+surface       = "#161A12"
+
+[ember]
+glyph         = "🔥"
+accent        = "#F4553C"
+accent_bright = "#F49C1E"
+foreground    = "#C7ADA6"
+background    = "#0A0504"
+surface       = "#23100B"
+
+[glacier]
+glyph         = "❄️"
+accent        = "#7FE8F4"
+accent_bright = "#C8F1F7"
+foreground    = "#AEBEC4"
+background    = "#030709"
+surface       = "#0E1C22"
+
+[tide]
+glyph         = "🌊"
+accent        = "#3C8AF4"
+accent_bright = "#29E3ED"
+foreground    = "#A6B4C7"
+background    = "#03060A"
+surface       = "#0C1626"
+
+[cherry]
+glyph         = "🍒"
+accent        = "#F43C7A"
+accent_bright = "#F49CC8"
+foreground    = "#C7A9B4"
+background    = "#0A0407"
+surface       = "#220C16"

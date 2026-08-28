@@ -1,0 +1,370 @@
+#!/usr/bin/env python3
+"""Generate the Terminal Delight variant themes from variants.toml.
+
+Each variant in variants.toml becomes a complete Omarchy theme directory:
+a full colours palette derived from six keys, the curve's hyprland.lua with
+the variant's border gradient, a tinted background, and a preview tile whose
+face is the variant's glyph — which is what Omarchy's theme grid shows.
+
+Nothing here is clever. Six colours in, one theme out.
+"""
+
+import argparse
+import pathlib
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+
+REPO = pathlib.Path(__file__).resolve().parent.parent
+TILE_W, TILE_H = 1600, 900
+LABEL_FONT = "JetBrainsMono Nerd Font"
+
+# ---------------------------------------------------------------- colours ---
+
+
+def rgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
+
+
+def hexs(c):
+    return "#{:02X}{:02X}{:02X}".format(*(max(0, min(255, round(v))) for v in c))
+
+
+def mix(a, b, t):
+    """t=0 gives a, t=1 gives b."""
+    ra, rb = rgb(a), rgb(b)
+    return hexs(tuple(ra[i] + (rb[i] - ra[i]) * t for i in range(3)))
+
+
+def lighten(c, t):
+    return mix(c, "#FFFFFF", t)
+
+
+def palette(v, base):
+    """Derive a full Omarchy palette from the six keys of a variant.
+
+    The semantic ANSI colours (red, yellow, orange, magenta) are inherited
+    from the base theme so code stays readable in every variant. The slots
+    Terminal Delight uses as its signature pair — the greens and cyans — are
+    where the variant's own hue lands, which is what makes one terminal
+    tell itself apart from the next at a glance.
+    """
+    acc, br = v["accent"], v["accent_bright"]
+    fg, bg, surf = v["foreground"], v["background"], v["surface"]
+
+    p = {
+        "mode": "dark",
+        "accent": acc,
+        "selection": surf,
+        "muted": mix(surf, fg, 0.20),
+        "background": bg,
+        "dark_background": mix(bg, "#000000", 0.35),
+        "darker_background": mix(bg, "#000000", 0.60),
+        "lighter_background": mix(bg, surf, 0.70),
+        "foreground": fg,
+        "dark_foreground": mix(fg, bg, 0.55),
+        "light_foreground": mix(fg, bg, 0.25),
+        "bright_foreground": lighten(fg, 0.35),
+        # semantic, inherited
+        "red": base["red"],
+        "yellow": base["yellow"],
+        "orange": base["orange"],
+        "magenta": base["magenta"],
+        "bright_red": base["bright_red"],
+        "bright_yellow": base["bright_yellow"],
+        "bright_magenta": base["bright_magenta"],
+        # the variant's own hue
+        "green": mix(acc, bg, 0.35),
+        "cyan": mix(br, bg, 0.35),
+        "blue": mix(br, bg, 0.35),
+        "brown": mix(acc, bg, 0.62),
+        "bright_green": acc,
+        "bright_cyan": br,
+        "bright_blue": br,
+    }
+    return p
+
+
+COLORS_ORDER = [
+    ("mode", None),
+    (None, "accent"),
+    ("accent", None),
+    ("selection", None),
+    ("muted", None),
+    (None, "backgrounds"),
+    ("background", None),
+    ("dark_background", None),
+    ("darker_background", None),
+    ("lighter_background", None),
+    (None, "foregrounds"),
+    ("foreground", None),
+    ("dark_foreground", None),
+    ("light_foreground", None),
+    ("bright_foreground", None),
+    (None, "normal"),
+    ("red", None),
+    ("yellow", None),
+    ("orange", None),
+    ("green", None),
+    ("cyan", None),
+    ("blue", None),
+    ("magenta", None),
+    ("brown", None),
+    (None, "bright"),
+    ("bright_red", None),
+    ("bright_yellow", None),
+    ("bright_green", None),
+    ("bright_cyan", None),
+    ("bright_blue", None),
+    ("bright_magenta", None),
+]
+
+
+def colors_toml(name, v, p):
+    out = [
+        f"# Terminal Delight — {name}.",
+        "#",
+        f"# Generated from variants.toml by bin/build-variants. Edit the six keys",
+        f"# in variants.toml and re-run ./install-variants.sh; edits here are lost.",
+        "",
+    ]
+    for key, heading in COLORS_ORDER:
+        if heading:
+            out.append("")
+            continue
+        val = p[key]
+        if key == "mode":
+            out.append(f'mode = "{val}"')
+        else:
+            out.append(f'{key:<19}= "{val}"')
+    return "\n".join(out) + "\n"
+
+
+# ---------------------------------------------------------------- hyprland ---
+
+HYPRLAND_LUA = '''-- Terminal Delight ({name}) — curved glass.
+--
+-- Generated from variants.toml by bin/build-variants.
+--
+-- This file survives because you built this theme locally: omarchy-theme-set
+-- only strips Lua from a theme that carries its own .git. So the curve rides
+-- along with every variant, and the per-window warp in
+-- ~/.config/hypr/shaders/ is the only piece installed separately
+-- (./install-curve.sh).
+
+local home = os.getenv("HOME")
+local shader = home .. "/.local/state/omarchy/current/theme/crt-glass.frag"
+
+local active_border_color = {{ colors = {{ "rgba({accent}ee)", "rgba({bright}ee)" }}, angle = 45 }}
+local inactive_border_color = "rgba({inactive}aa)"
+
+hl.config({{
+  general = {{
+    border_size = 2,
+    col = {{
+      active_border = active_border_color,
+      inactive_border = inactive_border_color,
+    }},
+  }},
+
+  group = {{
+    col = {{
+      border_active = active_border_color,
+      border_inactive = inactive_border_color,
+    }},
+  }},
+
+  decoration = {{
+    -- rounding_power > 2 is a squircle, which reads as blown glass rather
+    -- than a rounded rectangle. The per-window warp keys off rounding > 0.
+    rounding = 14,
+    rounding_power = 2.6,
+
+    active_opacity = 0.94,
+    inactive_opacity = 0.86,
+
+    dim_inactive = true,
+    dim_strength = 0.18,
+
+    blur = {{
+      enabled = true,
+      size = 5,
+      passes = 2,
+      noise = 0.015,
+      contrast = 1.05,
+      brightness = 0.85,
+      vibrancy = 0.18,
+      popups = true,
+    }},
+
+    shadow = {{
+      enabled = true,
+      range = 26,
+      render_power = 3,
+      color = "rgba(00000066)",
+    }},
+
+    screen_shader = shader,
+  }},
+}})
+
+-- Terminal Delight warps its own panes -- rounding 0 keeps the compositor
+-- from bending them twice.
+o.window("terminal-delight", {{ rounding = 0 }})
+'''
+
+
+def hyprland_lua(name, v, p):
+    return HYPRLAND_LUA.format(
+        name=name,
+        accent=v["accent"].lstrip("#"),
+        bright=v["accent_bright"].lstrip("#"),
+        inactive=p["muted"].lstrip("#"),
+    )
+
+
+# ----------------------------------------------------------------- preview ---
+
+
+def run(cmd):
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"failed: {' '.join(str(c) for c in cmd)}\n{r.stderr.strip()}")
+
+
+def preview_tile(key, v, p, out):
+    """The tile Omarchy's theme grid shows: the glyph, on its own hue.
+
+    Nine desktop screenshots that differ only in tint are nine identical
+    thumbnails. A glyph on a colour field is legible at any size, which is
+    the entire point of the set.
+    """
+    acc, br, bg, surf = v["accent"], v["accent_bright"], v["background"], v["surface"]
+    with tempfile.TemporaryDirectory() as td:
+        td = pathlib.Path(td)
+
+        # the field: void, with the hue blooming out of the centre
+        run(["magick", "-size", f"{TILE_W}x{TILE_H}", f"radial-gradient:{mix(bg, acc, 0.42)}-{bg}",
+             td / "field.png"])
+
+        # 4px scanlines, the same period as the theme's own glass
+        run(["magick", "-size", "4x4", "xc:none", "-fill", "rgba(0,0,0,0.42)",
+             "-draw", "rectangle 0,0 3,0", td / "line.png"])
+        run(["magick", td / "field.png", "-write", "mpr:f", "+delete",
+             "mpr:f", "(", td / "line.png", "-write", "mpr:l", "+delete",
+             "-size", f"{TILE_W}x{TILE_H}", "tile:mpr:l", ")",
+             "-compose", "over", "-composite", td / "scan.png"])
+
+        # the glyph
+        run(["magick", "-background", "none",
+             f'pango:<span font="Noto Color Emoji 210">{v["glyph"]}</span>',
+             "-trim", "+repage", "-resize", "300x300", td / "glyph.png"])
+
+        # the label, letterspaced small caps in the accent
+        label = key.upper()
+        run(["magick", "-background", "none",
+             f'pango:<span font="{LABEL_FONT} 30" foreground="{acc}" '
+             f'letter_spacing="18000">{label}</span>',
+             "-trim", "+repage", td / "label.png"])
+
+        # phosphor bloom: the glyph's own silhouette, blown out in the accent
+        run(["magick", td / "glyph.png", "-background", "none", "-gravity", "center",
+             "-extent", "480x480", "-alpha", "extract", "-blur", "0x44",
+             "-level", "0%,55%", td / "mask.png"])
+        run(["magick", "-size", "480x480", f"xc:{acc}", td / "mask.png",
+             "-alpha", "off", "-compose", "copy_opacity", "-composite",
+             "-channel", "A", "-evaluate", "multiply", "0.42", "+channel",
+             td / "bloom.png"])
+
+        # compose: bloom, glyph above centre, label under it
+        run(["magick", td / "scan.png",
+             td / "bloom.png", "-gravity", "center", "-geometry", "+0-70", "-composite",
+             td / "glyph.png", "-gravity", "center", "-geometry", "+0-70", "-composite",
+             td / "label.png", "-gravity", "center", "-geometry", "+0+130", "-composite",
+             td / "body.png"])
+
+        # the palette strip: what you are actually choosing
+        swatches = [p["bright_green"], p["bright_cyan"], p["foreground"],
+                    p["bright_yellow"], p["bright_red"], p["bright_magenta"]]
+        draw = []
+        sw, gap = 118, 20
+        total = len(swatches) * sw + (len(swatches) - 1) * gap
+        x0 = (TILE_W - total) // 2
+        y0 = TILE_H - 150
+        for i, c in enumerate(swatches):
+            x = x0 + i * (sw + gap)
+            draw += ["-fill", c, "-draw", f"roundrectangle {x},{y0} {x+sw},{y0+18} 9,9"]
+        run(["magick", td / "body.png", *draw, td / "swatch.png"])
+
+        # the vignette first, so the glass edge sits on top of it and survives
+        run(["magick", "-size", f"{TILE_W}x{TILE_H}",
+             "radial-gradient:#00000000-#000000A0", td / "vig.png"])
+        run(["magick", td / "swatch.png", td / "vig.png",
+             "-compose", "over", "-composite", td / "dim.png"])
+
+        # glass: a squircle edge in the gradient pair
+        run(["magick", td / "dim.png",
+             "-stroke", acc, "-strokewidth", "5", "-fill", "none",
+             "-draw", f"roundrectangle 12,12 {TILE_W-13},{TILE_H-13} 36,36",
+             "-stroke", br, "-strokewidth", "2",
+             "-draw", f"roundrectangle 22,22 {TILE_W-23},{TILE_H-23} 28,28",
+             "-depth", "8", "-strip", str(out)])
+
+
+# -------------------------------------------------------------------- main ---
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Build the Terminal Delight variant themes.")
+    ap.add_argument("--into", default=None,
+                    help="where the theme dirs go (default ~/.config/omarchy/themes)")
+    ap.add_argument("--previews-only", action="store_true",
+                    help="only refresh previews/ in the repo")
+    ap.add_argument("--only", default=None, help="build just this variant")
+    args = ap.parse_args()
+
+    variants = tomllib.loads((REPO / "variants.toml").read_text())
+    base = tomllib.loads((REPO / "colors.toml").read_text())
+    repo_previews = REPO / "previews"
+    repo_previews.mkdir(exist_ok=True)
+
+    dest = pathlib.Path(args.into).expanduser() if args.into else \
+        pathlib.Path.home() / ".config/omarchy/themes"
+
+    for key, v in variants.items():
+        if args.only and key != args.only:
+            continue
+        p = palette(v, base)
+
+        # the repo's own gallery copy, always refreshed
+        preview_tile(key, v, p, repo_previews / f"{key}.png")
+
+        if args.previews_only:
+            print(f"  {v['glyph']}  {key:<12} preview")
+            continue
+
+        theme = dest / f"terminal-delight-{key}"
+        (theme / "backgrounds").mkdir(parents=True, exist_ok=True)
+        (theme / "colors.toml").write_text(colors_toml(key, v, p))
+        (theme / "hyprland.lua").write_text(hyprland_lua(key, v, p))
+        shutil.copy2(REPO / "crt-glass.frag", theme / "crt-glass.frag")
+        shutil.copy2(REPO / "icons.theme", theme / "icons.theme")
+        shutil.copy2(repo_previews / f"{key}.png", theme / "preview.png")
+
+        # the base background, pulled toward the variant's hue
+        run(["magick", REPO / "backgrounds/0-void-tube.jpg",
+             "-modulate", "100,92", "-fill", v["accent"], "-tint", "22",
+             "-quality", "88", theme / "backgrounds" / f"0-{key}-tube.jpg"])
+
+        print(f"  {v['glyph']}  {key:<12} -> {theme}")
+
+    if not args.previews_only:
+        print(f"\n{len(variants)} variants installed. Pick one with the theme grid:")
+        print("  Super + Shift + Ctrl + Space")
+
+
+if __name__ == "__main__":
+    main()
