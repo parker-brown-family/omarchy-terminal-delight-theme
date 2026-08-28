@@ -48,6 +48,34 @@ is drawn for. Both are reversed by `./install-curve.sh --uninstall`.
 **Log out and back in.** Hyprland reads its shaders once at startup
 (`m_shadersInitialized`, 0.56); editing them on a running session does nothing.
 
+## The monitor has knobs
+
+The glass is not a fixed effect any more — it is Terminal Delight's own
+display stack, ported dial for dial from the terminal (`app/src/crt.rs` and
+its CRT render pass): scanlines with the phosphor tint line, the 160px
+tracking band that sweeps down and rests, the occasional stepped flicker
+burst, the glass glare hotspot with its diagonal streak, centre phosphor
+bloom, vignette — and a monitor-OSD grade (brightness / contrast /
+saturation / gamma) applied last, exactly the order the terminal grades its
+own tube. Each variant's glass glows in its own hue: the phosphor, scanline
+tint, tracking band and glare are retinted per variant by `bin/build-variants`.
+
+Every dial is a `const` at the top of `crt-glass.frag` — the MONITOR CONFIG
+block is the config surface — and `td-monitor` turns them without a relogin:
+
+```bash
+td-monitor                       # what every knob is set to
+td-monitor set TRACKING 0.8      # a hotter roll bar
+td-monitor set FLICKER 0 SCAN 0.1   # calm it down
+td-monitor off                   # lift the glass entirely
+td-monitor reset                 # pristine defaults
+```
+
+A `set` is validated with `glslangValidator` before it touches the live
+compositor, applied across the whole installed family (a monitor setting is
+not a per-colourway thing), and recompiled in place. Hand-editing the block
+works exactly as well — the tool is a convenience, not a gate.
+
 ## What the warp does, and what it costs
 
 The warp compiles only into the rounded-window shader variant, so it keys off
@@ -180,13 +208,14 @@ rather than in any theme:
 |---|---|
 | `colors.toml` | the palette every Omarchy template is generated from |
 | `backgrounds/` | Void Tube |
-| `crt-glass.frag` | full-screen finisher: scanlines, centre bloom, vignette. `CURV = 0` — the per-window warp carries the curve, so raise it only if you want the whole desktop in one tube |
+| `crt-glass.frag` | the MONITOR pass — Terminal Delight's display stack for the whole desktop: px-true scanlines, the rolling tracking band, stepped flicker, glass glare, phosphor bloom, vignette, and a brightness/contrast/saturation/gamma grade. Every dial is a `const` in its MONITOR CONFIG block; `CURV = 0` because the per-window warp carries the curve |
 | `shaders/surface.frag`, `shaders/ext.frag` | the per-window warp |
 | `hyprland.lua` | rounding, blur, borders, screen shader. Applied if you copy this theme into `~/.config/omarchy/themes/` by hand; dropped if you install it from this repo |
 | `install-curve.sh` | the opt-in installer for what the drop takes away |
 | `variants.toml` | the variant set: six keys each, the only file you edit |
 | `bin/build-variants` | derives a full theme from those six keys, and draws the tile |
 | `bin/td-tint` | tint one terminal — text and border — without touching the theme |
+| `bin/td-monitor` | turn the monitor's knobs — rewrite the CONFIG block across the installed family, validate, recompile live |
 | `install-variants.sh` | builds every variant into `~/.config/omarchy/themes/` |
 | `previews/` | the tiles, as the theme grid shows them |
 

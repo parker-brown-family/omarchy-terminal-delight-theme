@@ -46,6 +46,11 @@ mkdir -p "$bindir"
 ln -sfn "$here/bin/td-tint" "$bindir/td-tint"
 echo "installed $bindir/td-tint"
 
+# td-monitor turns the knobs on the desktop's CRT glass (the MONITOR CONFIG
+# block in crt-glass.frag) — same install story as td-tint.
+ln -sfn "$here/bin/td-monitor" "$bindir/td-monitor"
+echo "installed $bindir/td-monitor"
+
 "$here/bin/build-variants" "$@"
 
 cat <<'TIP'

@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Tune the MONITOR pass — the desktop's CRT glass — like turning the knobs on
+# the front of the set.
+#
+#   td-monitor                     what every knob is set to right now
+#   td-monitor set SCAN 0.35       turn one knob (repeat pairs for several)
+#   td-monitor set TRACKING 0 FLICKER 0
+#   td-monitor off                 lift the glass off the screen (until reload)
+#   td-monitor on                  put it back
+#   td-monitor reset               reinstall pristine knobs (re-runs install-variants)
+#
+# The knobs live as a `const` CONFIG block at the top of crt-glass.frag —
+# Hyprland screen shaders have no uniform-setting IPC, so "config variables"
+# means rewriting the block and recompiling, which takes a few ms and needs no
+# relogin. Every terminal-delight* theme dir is rewritten together (a monitor
+# setting is not a per-colourway thing), plus Omarchy's staged copy for the
+# active theme, and the shader is re-set so Hyprland recompiles it.
+#
+# A knob change is validated with glslangValidator BEFORE it reaches the live
+# desktop; a bad value restores the previous file and aborts. No validator
+# installed -> the edit still applies (upstream applies themes unvalidated
+# too), with a warning.
+set -euo pipefail
+
+THEMES="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/themes"
+STAGED="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme/crt-glass.frag"
+FRAG="crt-glass.frag"
+
+die() { echo "td-monitor: $*" >&2; exit 1; }
+
+family() {
+  local d
+  for d in "$THEMES"/terminal-delight*/; do
+    [[ -f "$d$FRAG" ]] && echo "$d$FRAG"
+  done
+}
+
+# The file whose values we SHOW: the staged (live) copy when it exists, else
+# the first installed family member.
+current_frag() {
+  if [[ -f "$STAGED" ]]; then echo "$STAGED"; return; fi
+  family | head -1
+}
+
+list() {
+  local f; f="$(current_frag)" || true
+  [[ -n "${f:-}" && -f "$f" ]] || die "no Terminal Delight monitor pass installed"
+  echo "monitor knobs ($f):"
+  sed -n '/---- MONITOR CONFIG/,/---- END CONFIG/p' "$f" |
+    grep -E '^const float' |
+    sed -E 's/^const float ([A-Z_]+)[[:space:]]*=[[:space:]]*([-0-9.]+);[[:space:]]*(\/\/)?[[:space:]]*/  \1 = \2   /'
+}
+
+recompile() {
+  command -v hyprctl >/dev/null || { echo "hyprctl not found — shader applies at next login"; return; }
+  # Re-setting the same path is a no-op, so drop and re-set to force a
+  # recompile of the changed file.
+  hyprctl keyword decoration:screen_shader "" >/dev/null
+  hyprctl keyword decoration:screen_shader "$STAGED" >/dev/null
+  local errs; errs="$(hyprctl configerrors)"
+  [[ "$errs" == *"no errors"* || -z "$errs" ]] && echo "recompiled clean" || echo "$errs"
+}
+
+set_knobs() {
+  [[ $# -ge 2 && $(($# % 2)) -eq 0 ]] || die "set wants KNOB VALUE pairs"
+  local files; mapfile -t files < <(family)
+  [[ -f "$STAGED" ]] && files+=("$STAGED")
+  [[ ${#files[@]} -gt 0 ]] || die "no Terminal Delight monitor pass installed"
+
+  # Rewrite a scratch copy of the staged file first and validate THAT, so a
+  # typo'd value can never reach the live compositor.
+  local probe; probe="$(mktemp --suffix=.frag)"
+  cp "${files[0]}" "$probe"
+  while [[ $# -gt 0 ]]; do
+    local k="$1" v="$2"; shift 2
+    [[ "$k" =~ ^[A-Z_]+$ ]] || die "knob names are UPPER_CASE (got '$k')"
+    [[ "$v" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || die "'$v' is not a number"
+    grep -qE "^const float $k[[:space:]]*=" "$probe" || die "no such knob: $k (td-monitor to list)"
+    sed -E -i "s|^(const float $k[[:space:]]*=[[:space:]]*)-?[0-9.]+(;.*)$|\1$v\2|" "$probe"
+    KNOBS+=("$k=$v")
+  done
+  if command -v glslangValidator >/dev/null; then
+    glslangValidator "$probe" >/dev/null || { rm -f "$probe"; die "edit does not compile — nothing applied"; }
+  else
+    echo "warning: glslangValidator not installed; applying unvalidated" >&2
+  fi
+  local f
+  for f in "${files[@]}"; do cp "$probe" "$f"; done
+  rm -f "$probe"
+  echo "set ${KNOBS[*]} across ${#files[@]} file(s)"
+  recompile
+}
+
+KNOBS=()
+case "${1:-list}" in
+list) list ;;
+set) shift; set_knobs "$@" ;;
+off)
+  command -v hyprctl >/dev/null || die "hyprctl not found"
+  hyprctl keyword decoration:screen_shader "" >/dev/null
+  echo "glass lifted — back at next reload, or: td-monitor on"
+  ;;
+on)
+  command -v hyprctl >/dev/null || die "hyprctl not found"
+  [[ -f "$STAGED" ]] || die "no staged shader at $STAGED — apply a Terminal Delight theme first"
+  hyprctl keyword decoration:screen_shader "$STAGED" >/dev/null
+  echo "glass back on"
+  ;;
+reset)
+  repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  [[ -x "$repo/install-variants.sh" ]] || die "run from the repo (install-variants.sh not found)"
+  (cd "$repo" && ./install-variants.sh)
+  [[ -f "$STAGED" && -d "$THEMES/terminal-delight-$(basename "$(dirname "$STAGED")" )" ]] || true
+  # restage the active theme's fresh copy if it is one of ours
+  name="$(cat "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme.name" 2>/dev/null || true)"
+  if [[ "$name" == terminal-delight* && -f "$THEMES/$name/$FRAG" ]]; then
+    cp "$THEMES/$name/$FRAG" "$STAGED"
+    recompile
+  fi
+  ;;
+-h|--help|help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
+*) die "unknown command '${1}' — td-monitor [set|off|on|reset|list]" ;;
+esac

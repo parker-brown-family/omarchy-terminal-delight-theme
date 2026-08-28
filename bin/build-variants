@@ -11,6 +11,7 @@ Nothing here is clever. Six colours in, one theme out.
 
 import argparse
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -323,6 +324,9 @@ def main():
                     help="where the theme dirs go (default ~/.config/omarchy/themes)")
     ap.add_argument("--previews-only", action="store_true",
                     help="only refresh previews/ in the repo")
+    ap.add_argument("--reuse-previews", action="store_true",
+                    help="skip tile drawing and use previews/ as-is — the fast path "
+                         "when only shaders/lua changed, since tiles depend on colours alone")
     ap.add_argument("--only", default=None, help="build just this variant")
     args = ap.parse_args()
 
@@ -339,8 +343,14 @@ def main():
             continue
         p = palette(v, base)
 
-        # the repo's own gallery copy, always refreshed
-        preview_tile(key, v, p, repo_previews / f"{key}.png")
+        # The gallery tile is pure colour — nothing else in a variant reaches it —
+        # so a shader-only rebuild may reuse it instead of paying ~30 s of
+        # ImageMagick per variant.
+        if args.reuse_previews:
+            if not (repo_previews / f"{key}.png").exists():
+                sys.exit(f"--reuse-previews, but previews/{key}.png is missing — run once without it")
+        else:
+            preview_tile(key, v, p, repo_previews / f"{key}.png")
 
         if args.previews_only:
             print(f"  {v['glyph']}  {key:<12} preview")
@@ -350,7 +360,29 @@ def main():
         (theme / "backgrounds").mkdir(parents=True, exist_ok=True)
         (theme / "colors.toml").write_text(colors_toml(key, v, p))
         (theme / "hyprland.lua").write_text(hyprland_lua(key, v, p))
-        shutil.copy2(REPO / "crt-glass.frag", theme / "crt-glass.frag")
+        # The monitor pass, retinted: the variant's own hue drives the phosphor
+        # wash, scanline tint and tracking band; its bright partner (pulled 60%
+        # toward white, the way a reflection reads) drives the glass glare. All
+        # the other knobs in the CONFIG block ride through untouched, so a
+        # td-monitor tweak survives a rebuild only in the repo copy — which is
+        # the point: variants.toml owns colour, crt-glass.frag owns the set.
+        frag = (REPO / "crt-glass.frag").read_text()
+        pr, pg, pb = (c / 255 for c in rgb(v["accent"]))
+        frag = re.sub(
+            r"const vec3  PHOSPHOR   = vec3\([^)]*\);.*",
+            f'const vec3  PHOSPHOR   = vec3({pr:.3f}, {pg:.3f}, {pb:.3f}); '
+            f'// {v["accent"]} — retinted by build-variants',
+            frag,
+        )
+        br_, bg_, bb_ = (c / 255 for c in rgb(v["accent_bright"]))
+        gr, gg, gb = (round(0.4 * c + 0.6, 3) for c in (br_, bg_, bb_))
+        frag = re.sub(
+            r"const vec3  GLARE_TINT = vec3\([^)]*\);.*",
+            f"const vec3  GLARE_TINT = vec3({gr}, {gg}, {gb}); "
+            f'// {v["accent_bright"]} pulled toward white',
+            frag,
+        )
+        (theme / "crt-glass.frag").write_text(frag)
         shutil.copy2(REPO / "icons.theme", theme / "icons.theme")
         # td-tint reads this to label the terminal it just tinted
         (theme / "glyph").write_text(v["glyph"] + "\n")
