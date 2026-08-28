@@ -76,6 +76,15 @@ compositor, applied across the whole installed family (a monitor setting is
 not a per-colourway thing), and recompiled in place. Hand-editing the block
 works exactly as well — the tool is a convenience, not a gate.
 
+**Motion is opt-in.** Hyprland treats any screen shader that declares a
+`time` uniform as animated and turns damage tracking off for it — its own
+warning says the quiet part: the whole screen redraws every frame. So the
+glass ships STILL (`ANIMATED 0`): no clock, no warning, no cost — scanlines,
+glare, bloom and grade are all static effects. Turning any motion knob
+(`TRACKING`, `FLICKER`, `JIGGLE`) above zero raises `ANIMATED` for you, and
+zeroing all three drops it again; `td-monitor set ANIMATED 1` forces it. The
+tracking band earns its GPU bill — decide per moment, not per install.
+
 ## What the warp does, and what it costs
 
 The warp compiles only into the rounded-window shader variant, so it keys off

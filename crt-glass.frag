@@ -11,21 +11,28 @@
 //
 // Hyprland pairs screen shaders with a GLES3 vertex shader, so the version
 // directive is required and the dialect is in/out/texture(), not varying.
-// `time` is fed by Hyprland; on a build that doesn't feed it, the animated
-// knobs (tracking, flicker, jiggle) freeze harmlessly and everything static
-// still renders.
+// The clock is OPT-IN: see ANIMATED in the config block — Hyprland treats any
+// screen shader that declares `uniform float time` as animated and switches
+// damage tracking off for it (full-screen redraws every frame), so the still
+// glass deliberately declares no clock at all.
 
 precision highp float;
 
 in vec2 v_texcoord;
 uniform sampler2D tex;
-uniform float time;
 out vec4 fragColor;
 
 // ---- MONITOR CONFIG ----------------------------------------------------
 // One knob per line, 1:1 with a terminal-delight dial (named in the comment).
 // `td-monitor` rewrites this block and re-applies the shader; hand edits are
 // equally welcome — this block IS the config surface.
+#define ANIMATED 0              // 1 = the tracking band / flicker / jiggle actually move.
+                                // Costs what Hyprland's warning says it costs: a time
+                                // uniform forces damage tracking off, i.e. the whole
+                                // screen redraws every frame. 0 = still glass — no clock,
+                                // no warning, the three motion knobs freeze invisibly.
+                                // td-monitor raises this when you turn a motion knob and
+                                // drops it when all three are zero.
 const float CURV       = 0.00;  // whole-desktop barrel — the per-window warp carries the curve
 const float ABERR      = 0.55;  // chromatic split at the rim
 const float SCAN       = 0.22;  // scanline depth              (TD scanline_opacity)
@@ -49,6 +56,16 @@ const float GAMMA      = 1.00;  // 0.5..2                      (TD grade gamma)
 const vec3  PHOSPHOR   = vec3(0.133, 0.773, 0.369); // #22C55E — build-variants retints per variant
 const vec3  GLARE_TINT = vec3(0.72, 1.00, 0.78);    // crt_pass.wgsl glare_color
 // ---- END CONFIG --------------------------------------------------------
+
+// The clock exists only when asked for. Declaring `uniform float time` — even
+// unused — is what trips Hyprland's animated-shader path (the warning keys off
+// the declaration, not the use), so the still glass compiles a const instead
+// and every time-driven expression below folds away.
+#if ANIMATED
+uniform float time;
+#else
+const float time = 0.0;
+#endif
 
 const float K1 = CURV * 0.14;
 const float K2 = CURV * 0.06;
