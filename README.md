@@ -9,6 +9,14 @@ every window, not just one app's.
 
 ![preview](preview.png)
 
+**Paint every terminal its own identity.** The 🎨 workspace picker floats a
+card over each tile; one click paints it — palette, border, glare and all —
+and the SATURATE crank makes the text glow like the terminal that inspired it:
+
+![the paint overlay — a picker card over every terminal tile](docs/gallery/paint-overlay.png)
+
+![five painted tiles — retro, tide, army, wood, and a saturated nuclear](docs/gallery/painted-wall.png)
+
 ## Install
 
 ```
