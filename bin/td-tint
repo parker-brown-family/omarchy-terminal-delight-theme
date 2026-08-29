@@ -8,6 +8,11 @@
 #   td-tint --json       the same list as JSON (key/glyph/accent/partner)
 #   td-tint --window 0x… cherry     aim at another terminal's window
 #   td-tint --window 0x… --clear    …or clear it
+#   td-tint --window 0x… --border-only cherry   borders only, leave the text palette be
+#
+# Each painted window's pick is remembered at $XDG_RUNTIME_DIR/td-tint/<addr>
+# — runtime-only like everything else here (dies at logout), but enough that a
+# border repair restores an identity instead of guessing or erasing it.
 #
 # An Omarchy theme is global by design: switching it repaints every terminal
 # at once, which is the opposite of being able to tell them apart. So this
@@ -22,6 +27,7 @@ set -euo pipefail
 THEMES="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/themes"
 PREFIX="terminal-delight-"
 CURRENT="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme/colors.toml"
+RUNDIR="${XDG_RUNTIME_DIR:-/tmp}/td-tint"
 
 die() { echo "td-tint: $*" >&2; exit 1; }
 
@@ -140,6 +146,14 @@ if [[ "${1:-}" == "--window" ]]; then
   shift 2
 fi
 
+# --border-only: reframe the window without touching what's on the tube — the
+# repair verb for a window whose text tint is right but whose border was lost.
+BORDER_ONLY=""
+if [[ "${1:-}" == "--border-only" ]]; then
+  BORDER_ONLY=1
+  shift
+fi
+
 case "${1:-}" in
 --list)
   for v in $(variants); do printf '  %s  %s\n' "$(glyph_of "$v")" "$v"; done
@@ -177,6 +191,7 @@ case "${1:-}" in
         "hl.dsp.window.set_prop({ prop = \"$prop\", value = \"unset\", window = \"address:$addr\" })" \
         >/dev/null 2>&1 || true
     done
+    rm -f "$RUNDIR/$addr"
   fi
   echo "cleared — this terminal follows the desktop theme again."
   exit 0
@@ -200,18 +215,27 @@ colors="$theme/colors.toml"
 [[ -f $colors ]] || die "$colors is missing — re-run ./install-variants.sh"
 
 # 1. the text: the target terminal's own palette, straight down its tty
-if [[ -n $TARGET_ADDR ]]; then
-  tty=$(window_tty "$TARGET_ADDR") || die "no shell tty behind window $TARGET_ADDR"
-else
-  tty=$(this_tty) || true
-  [[ -n ${tty:-} ]] || die "not attached to a terminal."
+# (skipped under --border-only — the tube already shows the right colours)
+if [[ -z $BORDER_ONLY ]]; then
+  if [[ -n $TARGET_ADDR ]]; then
+    tty=$(window_tty "$TARGET_ADDR") || die "no shell tty behind window $TARGET_ADDR"
+  else
+    tty=$(this_tty) || true
+    [[ -n ${tty:-} ]] || die "not attached to a terminal."
+  fi
+  omarchy-theme-osc "$colors" >"$tty"
 fi
-omarchy-theme-osc "$colors" >"$tty"
 
 # 2. the frame: this window's own border, so it reads while unfocused too
 accent=$(omarchy-theme-color --file "$colors" accent)
 partner=$(omarchy-theme-color --file "$colors" bright_cyan "$accent")
 if [[ -n $TARGET_ADDR ]]; then addr="$TARGET_ADDR"; else addr=$(this_window) || true; fi
 set_border "${addr:-}" "rgba(${accent#\#}ee) rgba(${partner#\#}ee) 45deg" "rgba($(dim_hex "$accent")cc)"
+
+# remember the pick, so a later repair restores instead of guessing
+if [[ -n ${addr:-} ]]; then
+  mkdir -p "$RUNDIR"
+  printf '%s\n' "$variant" >"$RUNDIR/$addr"
+fi
 
 printf '%s  this terminal is %s\n' "$(glyph_of "$variant")" "$variant"
