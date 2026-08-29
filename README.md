@@ -36,10 +36,18 @@ it, because the curve lives in exactly the file it drops.
 
 Two pieces make a window look like glass:
 
-| Piece | File | Survives `theme install`? |
+| Piece | Where it comes from | Survives `theme install`? |
 |---|---|---|
 | Per-window barrel warp | `shaders/{surface,ext}.frag` | goes to `~/.config/hypr/shaders/`, never the theme dir |
-| Rounding, squircle, blur, screen shader | `hyprland.lua` | **no** — dropped as Lua |
+| Rounding, squircle, blur, screen shader | Lua — and Omarchy drops Lua from any theme installed from a repo | **no** |
+
+This repo therefore ships no `hyprland.lua` of its own. It would be dead
+weight: Omarchy strips it on install and regenerates the colour half from
+`colors.toml`, so the file could only ever mislead someone reading the repo
+into thinking it took effect. The two places Lua genuinely *does* survive are
+both still covered — a **generated variant** gets its own (see
+[Why the variants are built, not shipped](#why-the-variants-are-built-not-shipped)),
+and everyone else gets the same settings from `install-curve.sh`.
 
 So the curve ships as a script you run yourself, after you have read it:
 
@@ -256,8 +264,7 @@ rather than in any theme:
 | `backgrounds/` | Void Tube |
 | `crt-glass.frag` | the MONITOR pass — Terminal Delight's display stack for the whole desktop: px-true scanlines, the rolling tracking band, stepped flicker, glass glare, phosphor bloom, vignette, and a brightness/contrast/saturation/gamma grade. Every dial is a `const` in its MONITOR CONFIG block; `CURV = 0` because the per-window warp carries the curve |
 | `shaders/surface.frag`, `shaders/ext.frag` | the per-window warp |
-| `hyprland.lua` | rounding, blur, borders, screen shader. Applied if you copy this theme into `~/.config/omarchy/themes/` by hand; dropped if you install it from this repo |
-| `install-curve.sh` | the opt-in installer for what the drop takes away |
+| `install-curve.sh` | the opt-in installer for what the drop takes away: the per-window shaders, plus a managed rounding/blur/shadow/screen-shader block in `~/.config/hypr/looknfeel.lua` |
 | `variants.toml` | the variant set: six keys each, the only file you edit |
 | `bin/build-variants` | derives a full theme from those six keys, and draws the tile |
 | `bin/td-tint` | tint one terminal — text and border — without touching the theme |
@@ -268,9 +275,10 @@ rather than in any theme:
 | `previews/` | the tiles, as the theme grid shows them |
 
 Copying the directory into `~/.config/omarchy/themes/terminal-delight/`
-yourself keeps all of it, `hyprland.lua` included — a theme you wrote stays
-yours. Then `install-curve.sh` only needs to place the shaders, and it will
-tell you it is skipping the rest.
+yourself keeps all of it — a theme you wrote stays yours — but the curve still
+arrives through `install-curve.sh`, which writes its managed block into
+`~/.config/hypr/looknfeel.lua`. It skips that step, and says so, if the staged
+theme already carries Lua of its own; a generated variant does.
 
 ## Agents paint too
 
