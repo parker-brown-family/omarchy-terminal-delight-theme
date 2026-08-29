@@ -79,6 +79,18 @@ for pid in chain:
 ' 2>/dev/null
 }
 
+# A dim of the same hue: scale each RGB channel to 35% so the unfocused
+# border keeps the variant's identity at a fraction of its luminance. Alpha
+# alone cannot do this — a neon accent at low alpha still reads bright over a
+# dark tube, which is how "unfocused" ended up nearly as loud as "focused".
+dim_hex() {
+  local hex="${1#\#}" r g b
+  r=$(( 16#${hex:0:2} * 35 / 100 ))
+  g=$(( 16#${hex:2:2} * 35 / 100 ))
+  b=$(( 16#${hex:4:2} * 35 / 100 ))
+  printf '%02X%02X%02X' "$r" "$g" "$b"
+}
+
 # The border is the FOCUS signal: only the active window wears the loud 45°
 # gradient; unfocused keeps the variant's hue as a quiet solid. Setting both
 # states to the same bright value — the old behaviour — made a wall of tinted
@@ -200,6 +212,6 @@ omarchy-theme-osc "$colors" >"$tty"
 accent=$(omarchy-theme-color --file "$colors" accent)
 partner=$(omarchy-theme-color --file "$colors" bright_cyan "$accent")
 if [[ -n $TARGET_ADDR ]]; then addr="$TARGET_ADDR"; else addr=$(this_window) || true; fi
-set_border "${addr:-}" "rgba(${accent#\#}ee) rgba(${partner#\#}ee) 45deg" "rgba(${accent#\#}44)"
+set_border "${addr:-}" "rgba(${accent#\#}ee) rgba(${partner#\#}ee) 45deg" "rgba($(dim_hex "$accent")cc)"
 
 printf '%s  this terminal is %s\n' "$(glyph_of "$variant")" "$variant"
