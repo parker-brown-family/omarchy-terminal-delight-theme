@@ -96,7 +96,7 @@ printf 'cherry\n' > "$XDG_RUNTIME_DIR/td-tint/0xaaa"
 printf 'ghost\n' > "$XDG_RUNTIME_DIR/td-tint/0xdead"
 : > "$TD_TEST_LOG/hyprctl.log"
 sync_out="$(bash "$root/bin/td-tint" --sync)"
-assert_has "sync reports two terminal windows" "$sync_out" "synced 2"
+assert_has "sync reports three paintable terminal windows" "$sync_out" "synced 3"
 hlog="$(cat "$TD_TEST_LOG/hyprctl.log")"
 assert_has "recorded window re-framed with its variant accent" "$hlog" 'active_border_color", value = "rgba(F43C7Aee)'
 assert_has "recorded window's dim inactive set" "$hlog" '0xaaa'
@@ -117,7 +117,7 @@ fi
 
 echo "— td-tint --state (the oracle)"
 state="$(bash "$root/bin/td-tint" --state)"
-assert_eq "state sees the three terminals, not chrome" "$(jq '.tiles | length' <<<"$state")" "3"
+assert_eq "state sees the four terminal tiles, not chrome" "$(jq '.tiles | length' <<<"$state")" "4"
 assert_eq "state carries the variant contract" "$(jq '.variants | length' <<<"$state")" "2"
 assert_eq "state names the active workspace" "$(jq '.active_workspace' <<<"$state")" "1"
 assert_eq "state carries the focused window" "$(jq -r '.focused' <<<"$state")" "0xbbb"
@@ -125,6 +125,7 @@ assert_eq "state carries the monitor offset" "$(jq -c '[.monitor.x, .monitor.y]'
 assert_eq "recorded pick surfaces on its tile" "$(jq -r '.tiles[] | select(.address=="0xaaa") | .variant' <<<"$state")" "cherry"
 assert_eq "a '-' pin surfaces as null variant" "$(jq -r '.tiles[] | select(.address=="0xbbb") | .variant' <<<"$state")" "null"
 assert_eq "terminal-delight tiles are flagged unpaintable" "$(jq -c '.tiles[] | select(.address=="0xddd") | [.terminal_delight, .paintable]' <<<"$state")" "[true,false]"
+assert_eq "Omarchy's generic agent terminal is paintable" "$(jq -c '.tiles[] | select(.address=="0xeee") | [.class, .terminal_delight, .paintable]' <<<"$state")" '["org.omarchy.agent",false,true]'
 assert_eq "tiles carry pid and geometry for the overlay" "$(jq -c '.tiles[] | select(.address=="0xaaa") | [.pid, .at, .size]' <<<"$state")" "[100,[0,0],[400,300]]"
 
 echo "— td-monitor"
@@ -167,7 +168,7 @@ assert_has "border_only paints through the CLI" "$(line 5 | jq -r '.result.conte
 assert_eq "border_only records the pick" "$(cat "$XDG_RUNTIME_DIR/td-tint/0xaaa")" "cherry"
 assert_has "monitor_set turns the knob" "$(line 6 | jq -r '.result.content[0].text')" "GLARE=0.3"
 tiles="$(line 7 | jq -r '.result.content[0].text')"
-assert_eq "list_tiles sees the three terminals, not chrome" "$(jq 'length' <<<"$tiles")" "3"
+assert_eq "list_tiles sees all four terminal tiles, not chrome" "$(jq 'length' <<<"$tiles")" "4"
 assert_eq "list_tiles reads the recorded variant" "$(jq -r '.[] | select(.address=="0xaaa") | .variant' <<<"$tiles")" "cherry"
 assert_eq "list_tiles reports the '-' pin as no variant" "$(jq -r '.[] | select(.address=="0xbbb") | .variant' <<<"$tiles")" "null"
 assert_eq "list_tiles flags terminal-delight windows" "$(jq -r '.[] | select(.address=="0xddd") | .terminal_delight' <<<"$tiles")" "true"

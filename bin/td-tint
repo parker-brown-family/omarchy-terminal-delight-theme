@@ -41,7 +41,7 @@ SAT_FACTOR="1.6"  # how hard SATURATE cranks — tuned against the TD screenshot
 # THE terminal-class registry — every consumer (--sync, --state, and through
 # --state the MCP server and the overlay) reads this one constant. Add a
 # terminal here and the whole system sees it.
-TERM_CLASSES='["foot","Alacritty","kitty","com.mitchellh.ghostty","org.wezfurlong.wezterm"]'
+TERM_CLASSES='["foot","org.omarchy.agent","Alacritty","kitty","com.mitchellh.ghostty","org.wezfurlong.wezterm"]'
 
 die() { echo "td-tint: $*" >&2; exit 1; }
 
