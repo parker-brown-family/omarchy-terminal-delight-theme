@@ -56,6 +56,14 @@ echo "installed $bindir/td-monitor"
 ln -sfn "$here/bin/td-mcp" "$bindir/td-mcp"
 echo "installed $bindir/td-mcp"
 
+# The self-healing half of td-tint: Omarchy runs theme-set.d executables
+# after every theme switch, and per-window border props outlive switches
+# (set_prop has no working unset) — so every switch runs the reconciler.
+hookdir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/hooks/theme-set.d"
+mkdir -p "$hookdir"
+ln -sfn "$here/hooks/theme-set.d/td-tint-sync.hook" "$hookdir/td-tint-sync.hook"
+echo "installed $hookdir/td-tint-sync.hook"
+
 "$here/bin/build-variants" "$@"
 
 cat <<'TIP'

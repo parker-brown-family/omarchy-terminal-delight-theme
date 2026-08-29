@@ -76,6 +76,14 @@ compositor, applied across the whole installed family (a monitor setting is
 not a per-colourway thing), and recompiled in place. Hand-editing the block
 works exactly as well — the tool is a convenience, not a gate.
 
+**The glare lives on the tiles.** Each window's glass glare (the hotspot +
+diagonal streak) ships in the per-window warp shaders — `install-curve.sh`,
+relogin to arm — so every tile catches the room light like a Terminal Delight
+pane, and Terminal Delight's own windows (which draw their own glass) are
+excluded by their rounding-0 rule. The monitor pass's `GLARE` knob is the
+WHOLE-SCREEN version and defaults to 0; without the curve installed, raise it
+(`td-monitor set GLARE 0.42`) for one big sheet of glass instead.
+
 **Motion is opt-in.** Hyprland treats any screen shader that declares a
 `time` uniform as animated and turns damage tracking off for it — its own
 warning says the quiet part: the whole screen redraws every frame. So the
@@ -193,6 +201,14 @@ ANSI ramp and window border all matching.
 The window it recolours is found by walking up `/proc` from the calling shell
 until a pid matches a Hyprland client, so it works from inside tmux and from
 a script, not only from the shell you are typing in.
+
+Every pick is remembered at `$XDG_RUNTIME_DIR/td-tint/<addr>` (runtime-only,
+dies at logout), and a `theme-set.d` hook installed by `install-variants.sh`
+runs `td-tint --sync` after every Omarchy theme switch — so recorded picks
+keep their identity, everything else adopts the new theme's borders, and no
+window is ever left wearing yesterday's colours. Per-window border props
+survive switches on their own (Hyprland's `set_prop` has no working unset),
+which is exactly why the hook exists.
 
 Terminal Delight itself is not the target here — it renders its own palette
 and has a per-pane colour tray for the same job. `td-tint` is for foot,

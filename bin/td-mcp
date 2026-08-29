@@ -238,6 +238,8 @@ def handle(req):
             "capabilities": {"tools": {}},
             "serverInfo": SERVER_INFO,
         })
+    elif method == "ping":  # spec liveness check — an empty result IS the pong
+        reply(id_, {})
     elif method == "tools/list":
         reply(id_, {"tools": [
             {"name": name, "description": t["description"], "inputSchema": t["inputSchema"]}

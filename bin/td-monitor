@@ -147,7 +147,6 @@ reset)
   repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   [[ -x "$repo/install-variants.sh" ]] || die "run from the repo (install-variants.sh not found)"
   (cd "$repo" && ./install-variants.sh)
-  [[ -f "$STAGED" && -d "$THEMES/terminal-delight-$(basename "$(dirname "$STAGED")" )" ]] || true
   # restage the active theme's fresh copy if it is one of ours
   name="$(cat "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme.name" 2>/dev/null || true)"
   if [[ "$name" == terminal-delight* && -f "$THEMES/$name/$FRAG" ]]; then
