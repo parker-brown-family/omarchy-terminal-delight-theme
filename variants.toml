@@ -26,15 +26,19 @@ foreground    = "#C3B49A"
 background    = "#0A0705"
 surface       = "#1A1310"
 
-[radioactive]
+# Nuclear wears the mid-century atomic-age swatch (the 'Our Friend the Atom'
+# book board): trefoil-yellow anchor running to teal, aged-paper text, a deep
+# forest surface. The olive and orange bands fall out of the derivation —
+# green = accent toward the void, orange inherits from the base.
+[nuclear]
 glyph         = "☢️"
-accent        = "#C6F416"
-accent_bright = "#7CFF3F"
-foreground    = "#C0C9A8"
-background    = "#050803"
-surface       = "#14200A"
+accent        = "#E8D22E"
+accent_bright = "#4CC8D6"
+foreground    = "#C6BD9C"
+background    = "#0B0A04"
+surface       = "#1C2A20"
 
-[bat]
+[violet]
 glyph         = "🦇"
 accent        = "#9A6BF4"
 accent_bright = "#D46BF4"
@@ -50,7 +54,7 @@ foreground    = "#C9C0A0"
 background    = "#0A0803"
 surface       = "#1F1808"
 
-[soldier]
+[army]
 glyph         = "🪖"
 accent        = "#93A45F"
 accent_bright = "#D2C28C"
@@ -92,7 +96,7 @@ surface       = "#220C16"
 
 # TD's "cyberpunk" set (🌆 #ff00e6 / #00f0ff) — the neon skyline. The border
 # gradient runs the set's own magenta→cyan pair, which is the whole look.
-[retro-city]
+[retro]
 glyph         = "🌆"
 accent        = "#F42BD8"
 accent_bright = "#3CE9F4"
