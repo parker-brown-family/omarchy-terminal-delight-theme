@@ -89,3 +89,23 @@ accent_bright = "#F49CC8"
 foreground    = "#C7A9B4"
 background    = "#0A0407"
 surface       = "#220C16"
+
+# TD's "cyberpunk" set (🌆 #ff00e6 / #00f0ff) — the neon skyline. The border
+# gradient runs the set's own magenta→cyan pair, which is the whole look.
+[retro-city]
+glyph         = "🌆"
+accent        = "#F42BD8"
+accent_bright = "#3CE9F4"
+foreground    = "#C9A8C4"
+background    = "#08040E"
+surface       = "#1E0A24"
+
+# TD's "badger" set — strict equal-RGB greyscale, so no blue creeps in.
+# Semantic red/yellow/orange/magenta still arrive from the base theme.
+[badger]
+glyph         = "🦡"
+accent        = "#C8C8C8"
+accent_bright = "#F2F2F2"
+foreground    = "#BDBDBD"
+background    = "#070707"
+surface       = "#1A1A1A"
