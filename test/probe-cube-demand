@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Does anything on this machine actually paint through the 256-colour cube?
+#
+# SATURATE cranks the 16 base slots and fg/bg/cursor (bin/td-tint, saturate
+# path). OSC 4 can just as legally redefine slots 16-231 — the 6x6x6 cube —
+# and foot honours it, so cranking those too is a real and cheap extension.
+# The question this probe answers is whether anyone would SEE it.
+#
+# The honest way to ask is adversarial: give every TUI on the box the WORST
+# case for truecolor (COLORTERM unset, TERM=xterm-256color, a real pty) and
+# see what it emits. If a tool is ever going to fall back to indexed colour,
+# it does it here. A cube slot found under these conditions is demand; none
+# found is the invalidation criterion on omarchy-terminal-delight-theme#7.
+#
+#   ./test/probe-cube-demand          probe and report
+#   ./test/probe-cube-demand -v       also show which slots each tool used
+#
+# Not part of test/run: this reads the live machine, so it is evidence about
+# THIS box on the day it ran, not a property of the repo. Re-run it before
+# trusting the answer — a new TUI, or a config that drops truecolor, changes
+# it.
+set -uo pipefail
+
+verbose=""
+[[ "${1:-}" == "-v" ]] && verbose=1
+
+command -v script >/dev/null || { echo "needs util-linux's script(1)" >&2; exit 1; }
+
+T="$(mktemp -d)"
+trap 'rm -rf "$T"' EXIT
+
+cube_found=0
+truecolor_found=0
+probed=0
+
+# One tool, in a pty, stripped of every truecolor hint we can strip.
+probe() {
+  local name="$1" secs="$2"; shift 2
+  command -v "${1%% *}" >/dev/null 2>&1 || return 0
+  probed=$((probed + 1))
+
+  # Backgrounded and waited on rather than run in the foreground: an
+  # interactive TUI is killed by the timeout, and bash announces a
+  # foreground SIGKILL on its own stderr where no redirect can reach it.
+  local raw="$T/$name.raw"
+  env -u COLORTERM -u TERM_PROGRAM -u VTE_VERSION TERM=xterm-256color \
+    timeout --kill-after=1s "$secs" \
+    script -qec "$*" /dev/null >"$raw" 2>/dev/null &
+  wait $! 2>/dev/null
+
+  # SGR indexed colour: 38;5;N (fg) or 48;5;N (bg). 0-15 is the base palette
+  # SATURATE already cranks; 232-255 is the grey ramp; 16-231 is the cube.
+  local cube
+  cube=$(grep -aoE '[34]8;5;[0-9]+' "$raw" 2>/dev/null |
+    sed -E 's/.*;//' | awk '$1 >= 16 && $1 <= 231' | sort -un | tr '\n' ' ')
+
+  # grep -c always prints a count and exits 1 on zero matches, so a `|| echo 0`
+  # here would append a SECOND number and break the arithmetic below.
+  local tc
+  tc=$(grep -acE '[34]8;2;[0-9]+;[0-9]+;[0-9]+' "$raw" 2>/dev/null)
+  [[ $tc =~ ^[0-9]+$ ]] || tc=0
+
+  local verdict
+  if [[ -n $cube ]]; then
+    verdict=$'\033[33mCUBE\033[0m'
+    cube_found=$((cube_found + 1))
+  elif [[ $tc -gt 0 ]]; then
+    verdict=$'\033[32mtruecolor\033[0m'
+    truecolor_found=$((truecolor_found + 1))
+  else
+    verdict="base 16 / none"
+  fi
+
+  printf '  %-10s %-24b %s\n' "$name" "$verdict" \
+    "$([[ -n $verbose && -n $cube ]] && echo "slots: $cube")"
+}
+
+echo "— every TUI on this box, denied truecolor, in a pty"
+
+probe bat      5 'bat --color=always --style=full /etc/os-release'
+probe eza      5 'eza --color=always --icons -la /usr/bin'
+probe rg       5 'rg --color=always -n . /etc/os-release'
+probe fd       5 'fd --color=always . /etc/systemd'
+probe delta    5 'git -C '"$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"' -c core.pager=cat show --color=always HEAD'
+probe btop     4 'btop --preset 0'
+probe lazygit  4 'lazygit --path /tmp'
+probe fzf      4 'printf "a\nb\nc\n" | fzf --filter=a'
+probe gum      4 'gum style --foreground 212 hello'
+probe nvim     6 'nvim --clean -c "syntax on" -c "set nu" -c "q" /etc/os-release'
+probe starship 4 'starship prompt'
+probe man      5 'man ls'
+probe less     4 'less -R /etc/os-release'
+probe tmux     5 'tmux -L cubeprobe new-session -d "sleep 1"; tmux -L cubeprobe kill-server'
+
+echo
+echo "— what SATURATE covers today"
+printf '  saturate_toml:  the 16 base slots + fg/bg/cursor, from colors.toml\n'
+printf '  cube_osc:       OSC 4 for slots 16-231, same crank (added for #7)\n'
+printf '  left alone:     232-255, the grey ramp — S=0, so the crank is identity\n'
+
+echo
+if [[ $cube_found -gt 0 ]]; then
+  printf '\033[33mVERDICT: %d of %d tools reach for the cube — the gap is visible. #7 is real.\033[0m\n' \
+    "$cube_found" "$probed"
+  exit 1
+fi
+printf '\033[32mVERDICT: 0 of %d tools reached for the cube (%d went straight to truecolor).\033[0m\n' \
+  "$probed" "$truecolor_found"
+printf 'Cranking 16-231 would change nothing anyone sees on this box today.\n'
+printf 'That is the invalidation criterion on issue #7 — re-run before reopening.\n'

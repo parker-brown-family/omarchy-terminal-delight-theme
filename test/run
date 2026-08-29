@@ -74,6 +74,40 @@ r="$(hexch "$fg_hex" 0)"; g="$(hexch "$fg_hex" 2)"
 assert_eq "background self-consistent with sat_hex" "$(grep '^background' "$T/sat.toml" | sed -E 's/.*"#([0-9A-F]{6})".*/\1/')" "$(sat_hex 0A0407 1.6)"
 assert_eq "comment lines survive byte-identical" "$(head -1 "$T/sat.toml")" "# fixture: an installed variant palette"
 
+echo "— the 256 colour cube (OSC 4 slots 16-231)"
+cube="$(cube_osc 1.6)"
+assert_eq "one OSC 4 sequence, not 216 of them" "$(grep -c $'\033]4;' <<<"$cube")" "1"
+assert_eq "every cube slot is in it" "$(grep -o ';rgb:' <<<"$cube" | wc -l)" "216"
+assert_has "it starts at 16" "$cube" ";16;rgb:"
+assert_has "…and ends at 231" "$cube" ";231;rgb:"
+assert_lacks "the base 16 stay the palette's job" "$cube" ";15;rgb:"
+assert_lacks "the grey ramp is left alone (S=0, so the crank is identity)" "$cube" ";232;rgb:"
+# Slot 180 is cube (4,3,2) = 215/175/135 = D7AF87 — the colour issue #7's own
+# repro reaches for. Asserting it against sat_hex is what stops the awk in
+# cube_osc drifting away from the awk in sat_hex.
+slot180="$(sed -E 's/.*;180;rgb:(..)\/(..)\/(..).*/\1\2\3/' <<<"$cube")"
+assert_eq "a cube slot agrees with sat_hex to the byte" "$slot180" "$(sat_hex D7AF87 1.6 | tr 'A-F' 'a-f')"
+if [[ $slot180 != d7af87 ]]; then ok "…and cube-180 actually moved"; else no "cube-180 did not move"; fi
+
+reset="$(cube_reset)"
+assert_eq "the reset is one OSC 104" "$(grep -c $'\033]104;' <<<"$reset")" "1"
+assert_has "it names the first cube slot" "$reset" ";16;"
+assert_has "…and the last" "$reset" ";231"
+assert_lacks "it never bare-resets, which would take the palette with it" "$reset" $'\033]104\033'
+
+echo "— paint_tty: what actually lands on the tty"
+paint_tty "$T/on.cap" "$here/fixtures/variant-cherry.toml" 1
+on="$(cat "$T/on.cap")"
+assert_has "on-path delivers a palette through omarchy-theme-osc" "$on" "OSC-FROM:"
+assert_lacks "…a CRANKED one, not the variant file itself" "$on" "variant-cherry.toml"
+assert_has "on-path carries the cube" "$on" ";180;rgb:"
+
+paint_tty "$T/off.cap" "$here/fixtures/variant-cherry.toml" 0
+off="$(cat "$T/off.cap")"
+assert_has "off-path delivers the base palette verbatim" "$off" "variant-cherry.toml"
+assert_has "off-path hands the cube back" "$off" $'\033]104;16;'
+assert_lacks "…and cranks nothing" "$off" ";180;rgb:"
+
 echo "— pick records"
 rec="$T/run/td-tint-recdir-test"
 rec_write "$rec" cherry 1

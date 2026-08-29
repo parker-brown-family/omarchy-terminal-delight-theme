@@ -211,6 +211,88 @@ saturate_toml() { # src dst factor accenthex
   done <"$1"
 }
 
+# The 6x6x6 colour cube (OSC 4 slots 16-231), cranked by the same factor as
+# the palette. A colors.toml has no way to name these — omarchy-theme-osc
+# knows the 16 base slots and fg/bg/cursor and nothing else — so SATURATE used
+# to leave every 256-indexed app painting stock colours beside a cranked
+# palette. Probed on this box (test/probe-cube-demand): `fd` reaches for slots
+# 81/149/203 and `gum` for 212, and gum is what td-tint's own picker is drawn
+# with.
+#
+# Slots 232-255, the grey ramp, are deliberately NOT emitted. sat_hex
+# multiplies HSL saturation and a grey has S=0, so S*f is still 0 — cranking
+# a grey is arithmetic identity. Emitting them would be 24 slots of noise on
+# the wire, and it would spend the palette's last neutral for nothing.
+#
+# One awk for all 216 rather than a shell loop over sat_hex, which would fork
+# 216 awks. The maths below is sat_hex's, deliberately — test/run asserts the
+# two agree slot by slot, so they cannot drift apart.
+cube_osc() { # factor
+  awk -v f="$1" '
+    function hue2rgb(p, q, t) {
+      if (t < 0) t += 1; if (t > 1) t -= 1
+      if (t < 1/6) return p + (q - p) * 6 * t
+      if (t < 1/2) return q
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6
+      return p
+    }
+    BEGIN {
+      split("0 95 135 175 215 255", lev, " ")
+      out = "\033]4"
+      for (n = 16; n <= 231; n++) {
+        i = n - 16
+        r = lev[int(i / 36) + 1] / 255
+        g = lev[int((i % 36) / 6) + 1] / 255
+        b = lev[(i % 6) + 1] / 255
+        mx = r > g ? r : g; mx = mx > b ? mx : b
+        mn = r < g ? r : g; mn = mn < b ? mn : b
+        l = (mx + mn) / 2; d = mx - mn; h = 0; s = 0
+        if (d != 0) {
+          s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn)
+          if (mx == r)      h = (g - b) / d + (g < b ? 6 : 0)
+          else if (mx == g) h = (b - r) / d + 2
+          else              h = (r - g) / d + 4
+          h = h / 6
+        }
+        s = s * f; if (s > 1) s = 1
+        if (s == 0) { nr = l; ng = l; nb = l }
+        else {
+          q = l < 0.5 ? l * (1 + s) : l + s - l * s
+          p = 2 * l - q
+          nr = hue2rgb(p, q, h + 1/3); ng = hue2rgb(p, q, h); nb = hue2rgb(p, q, h - 1/3)
+        }
+        out = out sprintf(";%d;rgb:%02x/%02x/%02x", n, nr*255+0.5, ng*255+0.5, nb*255+0.5)
+      }
+      printf "%s\033\\", out
+    }'
+}
+
+# Hand the cube back. OSC 104 with no parameters resets EVERY slot, which
+# would take the 16 the theme just set with it — so the indices are named.
+cube_reset() {
+  awk 'BEGIN { out = "\033]104"; for (n = 16; n <= 231; n++) out = out ";" n; printf "%s\033\\", out }'
+}
+
+# Everything that lands on a terminal's tty, in one place: the palette (plain
+# or cranked, through omarchy-theme-osc so the crank rides the normal delivery
+# path) and then the cube, which that path cannot reach. Four call sites used
+# to carry their own copy of these five lines, which is exactly how a crank
+# gets added to three of them and forgotten in the fourth.
+paint_tty() { # tty colorsfile cranked
+  local tty="$1" colors="$2" cranked="$3" acc tmp
+  if [[ $cranked == 1 ]]; then
+    acc=$(omarchy-theme-color --file "$colors" accent)
+    tmp="$(mktemp --suffix=.toml)"
+    saturate_toml "$colors" "$tmp" "$SAT_FACTOR" "$acc"
+    omarchy-theme-osc "$tmp" >"$tty"
+    cube_osc "$SAT_FACTOR" >>"$tty"
+    rm -f "$tmp"
+  else
+    omarchy-theme-osc "$colors" >"$tty"
+    cube_reset >>"$tty"
+  fi
+}
+
 # The installed variant set as JSON — shared by --json and --state, so the
 # card contract has exactly one producer.
 emit_variants_json() {
@@ -367,13 +449,7 @@ case "${1:-}" in
       fi
       # a recorded SATURATE survives the sweep — re-crank from the base palette
       if [[ -n $base && -f $base && "$(rec_sat "$rec")" == 1 ]]; then
-        if t=$(window_tty "$addr"); then
-          acc=$(omarchy-theme-color --file "$base" accent)
-          tmp="$(mktemp --suffix=.toml)"
-          saturate_toml "$base" "$tmp" "$SAT_FACTOR" "$acc"
-          omarchy-theme-osc "$tmp" >"$t"
-          rm -f "$tmp"
-        fi
+        if t=$(window_tty "$addr"); then paint_tty "$t" "$base" 1; fi
       fi
     else
       # an unrecorded window can only carry junk props by accident — pin it
@@ -468,14 +544,10 @@ case "${1:-}" in
   [[ -n $v && $v != "-" && -f "$THEMES/$PREFIX$v/colors.toml" ]] && base="$THEMES/$PREFIX$v/colors.toml"
   [[ -f $base ]] || die "no palette source to saturate"
   if [[ $new == 1 ]]; then
-    acc=$(omarchy-theme-color --file "$base" accent)
-    tmp="$(mktemp --suffix=.toml)"
-    saturate_toml "$base" "$tmp" "$SAT_FACTOR" "$acc"
-    omarchy-theme-osc "$tmp" >"$tty"
-    rm -f "$tmp"
+    paint_tty "$tty" "$base" 1
     echo "🫗  saturation cranked"
   else
-    omarchy-theme-osc "$base" >"$tty"
+    paint_tty "$tty" "$base" 0
     echo "saturation back to base"
   fi
   if [[ -n ${addr:-} ]]; then rec_write "$rec" "${v:--}" "$new"; fi
@@ -489,7 +561,7 @@ case "${1:-}" in
     tty=$(this_tty) || true
     addr=$(this_window) || true
   fi
-  [[ -n ${tty:-} && -f $CURRENT ]] && omarchy-theme-osc "$CURRENT" >"$tty"
+  [[ -n ${tty:-} && -f $CURRENT ]] && paint_tty "$tty" "$CURRENT" 0
   if [[ -n ${addr:-} ]]; then
     if mapfile -t tb < <(theme_border_args) && [[ ${#tb[@]} -eq 2 ]]; then
       set_border "$addr" "${tb[0]}" "${tb[1]}"
@@ -539,15 +611,7 @@ if [[ -z $BORDER_ONLY ]]; then
     tty=$(this_tty) || true
     [[ -n ${tty:-} ]] || die "not attached to a terminal."
   fi
-  if [[ "$prior_sat" == 1 ]]; then
-    acc=$(omarchy-theme-color --file "$colors" accent)
-    tmp="$(mktemp --suffix=.toml)"
-    saturate_toml "$colors" "$tmp" "$SAT_FACTOR" "$acc"
-    omarchy-theme-osc "$tmp" >"$tty"
-    rm -f "$tmp"
-  else
-    omarchy-theme-osc "$colors" >"$tty"
-  fi
+  paint_tty "$tty" "$colors" "${prior_sat:-0}"
 fi
 
 # 2. the frame: this window's own border, so it reads while unfocused too

@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# The pixel half of issue #7: does a cube slot ACTUALLY move in a real
+# terminal, and does it come back?
+#
+# test/run proves cube_osc emits the right bytes. Bytes are not colour. This
+# opens a real foot window, asks it what slot 180 holds (OSC 4 query), applies
+# the crank, asks again, resets, asks a third time — and reports the three
+# answers. A terminal that ignored OSC 4 for the cube would return the same
+# value all three times, which is the failure this exists to catch.
+#
+#   ./test/verify-cube-live
+#
+# Needs a Wayland session and foot. The window opens for about a second and
+# closes itself; nothing is written outside $TMPDIR.
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(dirname "$here")"
+
+command -v foot >/dev/null || { echo "needs foot (a terminal that answers OSC 4 queries)" >&2; exit 1; }
+[[ -n ${WAYLAND_DISPLAY:-} ]] || { echo "needs a Wayland session" >&2; exit 1; }
+
+out="$(mktemp)"
+inner="$(mktemp)"
+trap 'rm -f "$out" "$inner"' EXIT
+
+# Quoted heredoc: the inner script is data here, not something to expand.
+# Paths reach it through the environment, which is also what keeps it readable.
+cat >"$inner" <<'INNER'
+#!/usr/bin/env bash
+source "$TD_ROOT/bin/td-tint"
+
+# /dev/tty explicitly, on every read and write. A query printed to stdout
+# inside a command substitution goes down the pipe instead of to the terminal,
+# and then the only thing there is to read back is our own question.
+stty raw -echo </dev/tty
+
+ask() {  # what does the terminal hold for slot 180 right now?
+  local reply
+  printf '\033]4;180;?\033\\' >/dev/tty
+  IFS= read -r -s -t 2 -d '\' reply </dev/tty
+  # foot answers:  ESC ] 4 ; 180 ; rgb:RRRR/GGGG/BBBB  ST
+  sed -nE 's|.*rgb:(..)..'/'(..)..'/'(..)...*|\1\2\3|p' <<<"$reply"
+}
+
+before="$(ask)"
+cube_osc 1.6 >/dev/tty
+after="$(ask)"
+cube_reset >/dev/tty
+restored="$(ask)"
+
+printf '%s %s %s\n' "$before" "$after" "$restored" >"$TD_OUT"
+stty sane </dev/tty
+INNER
+chmod +x "$inner"
+
+TD_ROOT="$root" TD_OUT="$out" \
+  foot --app-id=td-cube-verify --title="verifying cube slot 180" \
+    -e bash "$inner" >/dev/null 2>&1
+
+read -r before after restored <"$out" 2>/dev/null || true
+want="$(source "$root/bin/td-tint"; sat_hex D7AF87 1.6 | tr 'A-F' 'a-f')"
+
+echo "— slot 180 (cube 4/3/2 = d7af87), round-tripped through a real foot"
+printf '  before crank : %s\n' "${before:-<no reply>}"
+printf '  after  crank : %s   (cube_osc says %s)\n' "${after:-<no reply>}" "$want"
+printf '  after  reset : %s\n' "${restored:-<no reply>}"
+echo
+
+[[ -n ${before:-} && -n ${after:-} && -n ${restored:-} ]] || {
+  echo "the terminal never answered — cannot conclude anything" >&2; exit 2; }
+
+fail=0
+[[ $before != "$after" ]]   || { echo "✗ the crank did not move slot 180"; fail=1; }
+[[ $after  == "$want" ]]    || { echo "✗ the terminal holds $after, cube_osc sent $want"; fail=1; }
+[[ $restored == "$before" ]] || { echo "✗ the reset did not hand slot 180 back"; fail=1; }
+[[ $fail -eq 0 ]] && echo "✓ cube-180 moves under SATURATE and returns on reset"
+exit "$fail"
