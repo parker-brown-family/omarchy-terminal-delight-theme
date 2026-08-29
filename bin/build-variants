@@ -18,6 +18,12 @@ import sys
 import tempfile
 import tomllib
 
+# Arch ships ImageMagick 7 (`magick`); Ubuntu — including the CI runner —
+# still ships IM6, where the same classic CLI lives at `convert`. Every
+# invocation here is classic-style (input, operations, output), which both
+# accept, so resolving the binary is the whole portability story.
+MAGICK = shutil.which("magick") or shutil.which("convert") or "magick"
+
 REPO = pathlib.Path(__file__).resolve().parent.parent
 TILE_W, TILE_H = 1600, 900
 LABEL_FONT = "JetBrainsMono Nerd Font"
@@ -251,40 +257,40 @@ def preview_tile(key, v, p, out):
         td = pathlib.Path(td)
 
         # the field: void, with the hue blooming out of the centre
-        run(["magick", "-size", f"{TILE_W}x{TILE_H}", f"radial-gradient:{mix(bg, acc, 0.42)}-{bg}",
+        run([MAGICK, "-size", f"{TILE_W}x{TILE_H}", f"radial-gradient:{mix(bg, acc, 0.42)}-{bg}",
              td / "field.png"])
 
         # 4px scanlines, the same period as the theme's own glass
-        run(["magick", "-size", "4x4", "xc:none", "-fill", "rgba(0,0,0,0.42)",
+        run([MAGICK, "-size", "4x4", "xc:none", "-fill", "rgba(0,0,0,0.42)",
              "-draw", "rectangle 0,0 3,0", td / "line.png"])
-        run(["magick", td / "field.png", "-write", "mpr:f", "+delete",
+        run([MAGICK, td / "field.png", "-write", "mpr:f", "+delete",
              "mpr:f", "(", td / "line.png", "-write", "mpr:l", "+delete",
              "-size", f"{TILE_W}x{TILE_H}", "tile:mpr:l", ")",
              "-compose", "over", "-composite", td / "scan.png"])
 
         # the glyph
-        run(["magick", "-background", "none",
+        run([MAGICK, "-background", "none",
              f'pango:<span font="Noto Color Emoji 210">{v["glyph"]}</span>',
              "-trim", "+repage", "-resize", "300x300", td / "glyph.png"])
 
         # the label, letterspaced small caps in the accent
         label = key.upper()
-        run(["magick", "-background", "none",
+        run([MAGICK, "-background", "none",
              f'pango:<span font="{LABEL_FONT} 30" foreground="{acc}" '
              f'letter_spacing="18000">{label}</span>',
              "-trim", "+repage", td / "label.png"])
 
         # phosphor bloom: the glyph's own silhouette, blown out in the accent
-        run(["magick", td / "glyph.png", "-background", "none", "-gravity", "center",
+        run([MAGICK, td / "glyph.png", "-background", "none", "-gravity", "center",
              "-extent", "480x480", "-alpha", "extract", "-blur", "0x44",
              "-level", "0%,55%", td / "mask.png"])
-        run(["magick", "-size", "480x480", f"xc:{acc}", td / "mask.png",
+        run([MAGICK, "-size", "480x480", f"xc:{acc}", td / "mask.png",
              "-alpha", "off", "-compose", "copy_opacity", "-composite",
              "-channel", "A", "-evaluate", "multiply", "0.42", "+channel",
              td / "bloom.png"])
 
         # compose: bloom, glyph above centre, label under it
-        run(["magick", td / "scan.png",
+        run([MAGICK, td / "scan.png",
              td / "bloom.png", "-gravity", "center", "-geometry", "+0-70", "-composite",
              td / "glyph.png", "-gravity", "center", "-geometry", "+0-70", "-composite",
              td / "label.png", "-gravity", "center", "-geometry", "+0+130", "-composite",
@@ -301,16 +307,16 @@ def preview_tile(key, v, p, out):
         for i, c in enumerate(swatches):
             x = x0 + i * (sw + gap)
             draw += ["-fill", c, "-draw", f"roundrectangle {x},{y0} {x+sw},{y0+18} 9,9"]
-        run(["magick", td / "body.png", *draw, td / "swatch.png"])
+        run([MAGICK, td / "body.png", *draw, td / "swatch.png"])
 
         # the vignette first, so the glass edge sits on top of it and survives
-        run(["magick", "-size", f"{TILE_W}x{TILE_H}",
+        run([MAGICK, "-size", f"{TILE_W}x{TILE_H}",
              "radial-gradient:#00000000-#000000A0", td / "vig.png"])
-        run(["magick", td / "swatch.png", td / "vig.png",
+        run([MAGICK, td / "swatch.png", td / "vig.png",
              "-compose", "over", "-composite", td / "dim.png"])
 
         # glass: a squircle edge in the gradient pair
-        run(["magick", td / "dim.png",
+        run([MAGICK, td / "dim.png",
              "-stroke", acc, "-strokewidth", "5", "-fill", "none",
              "-draw", f"roundrectangle 12,12 {TILE_W-13},{TILE_H-13} 36,36",
              "-stroke", br, "-strokewidth", "2",
@@ -392,7 +398,7 @@ def main():
         shutil.copy2(repo_previews / f"{key}.png", theme / "preview.png")
 
         # the base background, pulled toward the variant's hue
-        run(["magick", REPO / "backgrounds/0-void-tube.jpg",
+        run([MAGICK, REPO / "backgrounds/0-void-tube.jpg",
              "-modulate", "100,92", "-fill", v["accent"], "-tint", "22",
              "-quality", "88", theme / "backgrounds" / f"0-{key}-tube.jpg"])
 

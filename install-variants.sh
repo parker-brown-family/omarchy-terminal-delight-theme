@@ -35,7 +35,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
 fi
 
 command -v python3 >/dev/null || { echo "python3 is required." >&2; exit 1; }
-command -v magick >/dev/null || { echo "ImageMagick (magick) is required to draw the tiles." >&2; exit 1; }
+command -v magick >/dev/null || command -v convert >/dev/null || { echo "ImageMagick (magick or convert) is required to draw the tiles." >&2; exit 1; }
 fc-list 2>/dev/null | grep -qi "emoji" || \
   echo "warning: no emoji font found — the tiles will come out blank. Install noto-fonts-emoji." >&2
 
