@@ -79,14 +79,19 @@ for pid in chain:
 ' 2>/dev/null
 }
 
+# The border is the FOCUS signal: only the active window wears the loud 45°
+# gradient; unfocused keeps the variant's hue as a quiet solid. Setting both
+# states to the same bright value — the old behaviour — made a wall of tinted
+# terminals read identity but never focus.
 set_border() {
-  local addr="$1" value="$2" prop
+  local addr="$1" active="$2" inactive="$3"
   [[ -n $addr ]] || return 0
-  for prop in active_border_color inactive_border_color; do
-    hyprctl dispatch \
-      "hl.dsp.window.set_prop({ prop = \"$prop\", value = \"$value\", window = \"address:$addr\" })" \
-      >/dev/null 2>&1 || true
-  done
+  hyprctl dispatch \
+    "hl.dsp.window.set_prop({ prop = \"active_border_color\", value = \"$active\", window = \"address:$addr\" })" \
+    >/dev/null 2>&1 || true
+  hyprctl dispatch \
+    "hl.dsp.window.set_prop({ prop = \"inactive_border_color\", value = \"$inactive\", window = \"address:$addr\" })" \
+    >/dev/null 2>&1 || true
 }
 
 # Somebody ELSE'S terminal: --window hands us the Hyprland address, the client
@@ -195,6 +200,6 @@ omarchy-theme-osc "$colors" >"$tty"
 accent=$(omarchy-theme-color --file "$colors" accent)
 partner=$(omarchy-theme-color --file "$colors" bright_cyan "$accent")
 if [[ -n $TARGET_ADDR ]]; then addr="$TARGET_ADDR"; else addr=$(this_window) || true; fi
-set_border "${addr:-}" "rgba(${accent#\#}ee) rgba(${partner#\#}ee) 45deg"
+set_border "${addr:-}" "rgba(${accent#\#}ee) rgba(${partner#\#}ee) 45deg" "rgba(${accent#\#}44)"
 
 printf '%s  this terminal is %s\n' "$(glyph_of "$variant")" "$variant"

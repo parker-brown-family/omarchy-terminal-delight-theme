@@ -160,11 +160,13 @@ local home = os.getenv("HOME")
 local shader = home .. "/.local/state/omarchy/current/theme/crt-glass.frag"
 
 local active_border_color = {{ colors = {{ "rgba({accent}ee)", "rgba({bright}ee)" }}, angle = 45 }}
-local inactive_border_color = "rgba({inactive}aa)"
+-- Faint on purpose: the border is the FOCUS signal. Only the active tile
+-- wears the loud gradient; everything else recedes.
+local inactive_border_color = "rgba({inactive}55)"
 
 hl.config({{
   general = {{
-    border_size = 2,
+    border_size = 3,
     col = {{
       active_border = active_border_color,
       inactive_border = inactive_border_color,
@@ -188,7 +190,8 @@ hl.config({{
     inactive_opacity = 0.86,
 
     dim_inactive = true,
-    dim_strength = 0.18,
+    -- deep enough that the powered tile is unmistakable in a wall of tubes
+    dim_strength = 0.28,
 
     blur = {{
       enabled = true,

@@ -13,11 +13,11 @@ local shader = home .. "/.local/state/omarchy/current/theme/crt-glass.frag"
 
 -- Signal Green -> Cyan, the wordmark gradient.
 local active_border_color = { colors = { "rgba(67F454ee)", "rgba(29E3EDee)" }, angle = 45 }
-local inactive_border_color = "rgba(282E32aa)" -- Panel line
+local inactive_border_color = "rgba(282E3255)" -- Panel line, kept faint: the border IS the focus signal
 
 hl.config({
   general = {
-    border_size = 2,
+    border_size = 3,
     col = {
       active_border = active_border_color,
       inactive_border = inactive_border_color,
@@ -42,7 +42,8 @@ hl.config({
     inactive_opacity = 0.86,
 
     dim_inactive = true,
-    dim_strength = 0.18,
+    -- deep enough that the powered tile is unmistakable in a wall of tubes
+    dim_strength = 0.28,
 
     blur = {
       enabled = true,
