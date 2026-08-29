@@ -115,6 +115,18 @@ fi
 [[ ! -e "$XDG_RUNTIME_DIR/td-tint/none" ]] && ok "no shared 'none' record is ever created" || no "no shared 'none' record is ever created"
 [[ -x "$root/hooks/theme-set.d/td-tint-sync.hook" ]] && ok "theme-set hook shipped executable" || no "theme-set hook shipped executable"
 
+echo "— td-tint --state (the oracle)"
+state="$(bash "$root/bin/td-tint" --state)"
+assert_eq "state sees the three terminals, not chrome" "$(jq '.tiles | length' <<<"$state")" "3"
+assert_eq "state carries the variant contract" "$(jq '.variants | length' <<<"$state")" "2"
+assert_eq "state names the active workspace" "$(jq '.active_workspace' <<<"$state")" "1"
+assert_eq "state carries the focused window" "$(jq -r '.focused' <<<"$state")" "0xbbb"
+assert_eq "state carries the monitor offset" "$(jq -c '[.monitor.x, .monitor.y]' <<<"$state")" "[0,0]"
+assert_eq "recorded pick surfaces on its tile" "$(jq -r '.tiles[] | select(.address=="0xaaa") | .variant' <<<"$state")" "cherry"
+assert_eq "a '-' pin surfaces as null variant" "$(jq -r '.tiles[] | select(.address=="0xbbb") | .variant' <<<"$state")" "null"
+assert_eq "terminal-delight tiles are flagged unpaintable" "$(jq -c '.tiles[] | select(.address=="0xddd") | [.terminal_delight, .paintable]' <<<"$state")" "[true,false]"
+assert_eq "tiles carry pid and geometry for the overlay" "$(jq -c '.tiles[] | select(.address=="0xaaa") | [.pid, .at, .size]' <<<"$state")" "[100,[0,0],[400,300]]"
+
 echo "— td-monitor"
 listing="$(bash "$root/bin/td-monitor" list)"
 assert_has "list shows ANIMATED" "$listing" "ANIMATED = 0"
@@ -141,6 +153,7 @@ mcp_out="$(printf '%s\n' \
   '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"monitor_set","arguments":{"knob":"GLARE","value":0.3}}}' \
   '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"list_tiles","arguments":{}}}' \
   '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"nope","arguments":{}}}' \
+  '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"state","arguments":{}}}' \
   | python3 "$root/bin/td-mcp")"
 line() { sed -n "${1}p" <<<"$mcp_out"; }
 assert_eq "initialize answers the protocol version" "$(line 1 | jq -r .result.protocolVersion)" "2024-11-05"
@@ -159,6 +172,7 @@ assert_eq "list_tiles reads the recorded variant" "$(jq -r '.[] | select(.addres
 assert_eq "list_tiles reports the '-' pin as no variant" "$(jq -r '.[] | select(.address=="0xbbb") | .variant' <<<"$tiles")" "null"
 assert_eq "list_tiles flags terminal-delight windows" "$(jq -r '.[] | select(.address=="0xddd") | .terminal_delight' <<<"$tiles")" "true"
 assert_eq "unknown tool is a JSON-RPC error" "$(line 8 | jq -r '.error.code')" "-32602"
+assert_eq "the state tool relays the oracle verbatim" "$(line 9 | jq -r '.result.content[0].text' | jq -r '.focused')" "0xbbb"
 
 echo
 if [[ "$fail" -eq 0 ]]; then

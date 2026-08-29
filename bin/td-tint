@@ -6,6 +6,10 @@
 #   td-tint --clear      back to whatever the desktop theme says
 #   td-tint --list       what is installed
 #   td-tint --json       the same list as JSON (key/glyph/accent/partner)
+#   td-tint --state      the ORACLE: one JSON document of everything — variants,
+#                        active workspace, focused monitor, and every terminal
+#                        tile with its class/pid/geometry/pick/saturation.
+#                        MCP and the overlay render this; they derive nothing.
 #   td-tint --window 0x… cherry     aim at another terminal's window
 #   td-tint --window 0x… --clear    …or clear it
 #   td-tint --window 0x… --border-only cherry   borders only, leave the text palette be
@@ -33,6 +37,11 @@ PREFIX="terminal-delight-"
 CURRENT="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme/colors.toml"
 RUNDIR="${XDG_RUNTIME_DIR:-/tmp}/td-tint"
 SAT_FACTOR="1.6"  # how hard SATURATE cranks — tuned against the TD screenshots
+
+# THE terminal-class registry — every consumer (--sync, --state, and through
+# --state the MCP server and the overlay) reads this one constant. Add a
+# terminal here and the whole system sees it.
+TERM_CLASSES='["foot","Alacritty","kitty","com.mitchellh.ghostty","org.wezfurlong.wezterm"]'
 
 die() { echo "td-tint: $*" >&2; exit 1; }
 
@@ -200,6 +209,23 @@ saturate_toml() { # src dst factor accenthex
   done <"$1"
 }
 
+# The installed variant set as JSON — shared by --json and --state, so the
+# card contract has exactly one producer.
+emit_variants_json() {
+  local first=1 v c a b
+  printf '['
+  for v in $(variants); do
+    c="$THEMES/$PREFIX$v/colors.toml"
+    a=$(omarchy-theme-color --file "$c" accent)
+    b=$(omarchy-theme-color --file "$c" bright_cyan "$a")
+    [[ $first -eq 1 ]] || printf ','
+    printf '{"key":"%s","glyph":"%s","accent":"%s","partner":"%s"}' \
+      "$v" "$(glyph_of "$v")" "$a" "$b"
+    first=0
+  done
+  printf ']'
+}
+
 # The pick record: line 1 the variant ("-" = none), optional "sat=1" line.
 rec_variant() { [[ -f $1 ]] && head -1 "$1" || true; }
 rec_sat()     { [[ -f $1 ]] && grep -qx "sat=1" "$1" && echo 1 || true; }
@@ -344,7 +370,7 @@ case "${1:-}" in
       fi
     fi
     count=$((count + 1))
-  done < <(jq -r '.[] | select(.class=="foot" or .class=="Alacritty" or .class=="kitty" or .class=="com.mitchellh.ghostty" or .class=="org.wezfurlong.wezterm") | .address' <<<"$clients")
+  done < <(jq -r --argjson tc "$TERM_CLASSES" '.[] | select(.class as $cl | $tc | index($cl)) | .address' <<<"$clients")
   alive="$(jq -r '.[].address' <<<"$clients")"
   for f in "$RUNDIR"/0x*; do
     [[ -e $f ]] || break
@@ -354,20 +380,50 @@ case "${1:-}" in
   exit 0
   ;;
 --json)
-  # The overlay's contract: every installed variant with the two colours a
-  # card needs. Plain ordered JSON, no jq required to produce or consume.
-  printf '['
-  first=1
-  for v in $(variants); do
-    c="$THEMES/$PREFIX$v/colors.toml"
-    a=$(omarchy-theme-color --file "$c" accent)
-    b=$(omarchy-theme-color --file "$c" bright_cyan "$a")
-    [[ $first -eq 1 ]] || printf ','
-    printf '{"key":"%s","glyph":"%s","accent":"%s","partner":"%s"}' \
-      "$v" "$(glyph_of "$v")" "$a" "$b"
-    first=0
-  done
-  printf ']\n'
+  emit_variants_json
+  printf '\n'
+  exit 0
+  ;;
+--state)
+  # The oracle. Everything an agent, the MCP server or the overlay needs to
+  # render or mutate the box, in one tested document: no consumer re-derives
+  # window filtering, record parsing or monitor offsets ever again.
+  command -v hyprctl >/dev/null || die "--state needs a Hyprland session"
+  clients="$(hyprctl clients -j)"
+  aws="$(hyprctl activeworkspace -j | jq '.id')"
+  mons="$(hyprctl monitors -j)"
+  awin="$(hyprctl activewindow -j 2>/dev/null || echo '{}')"
+  recs='{}'
+  if [[ -d $RUNDIR ]]; then
+    recs=$(for f in "$RUNDIR"/0x*; do
+      [[ -f $f ]] || continue
+      printf '%s\t%s\t%s\n' "$(basename "$f")" "$(rec_variant "$f")" "$(rec_sat "$f")"
+    done | jq -R -s '
+      split("\n") | map(select(length > 0) | split("\t")
+        | {(.[0]): {v: .[1], s: (.[2] == "1")}}) | add // {}')
+  fi
+  variants_json="$(emit_variants_json)"
+  jq -n --argjson c "$clients" --argjson aw "$aws" --argjson m "$mons" \
+        --argjson r "$recs" --argjson v "$variants_json" --argjson tc "$TERM_CLASSES" \
+        --argjson fw "$awin" '
+    (($m | map(select(.focused)) | first) // ($m | first)) as $mon |
+    {
+      variants: $v,
+      active_workspace: $aw,
+      focused: ($fw.address // null),
+      monitor: {name: $mon.name, x: $mon.x, y: $mon.y},
+      tiles: [ $c[]
+        | select((.class as $cl | $tc | index($cl)) or .class == "terminal-delight")
+        | {address, class, pid,
+           workspace: .workspace.id,
+           on_active_workspace: (.workspace.id == $aw),
+           terminal_delight: (.class == "terminal-delight"),
+           paintable: (.class != "terminal-delight"),
+           at, size,
+           variant: ((($r[.address] // {}).v // "-") | if . == "-" then null else . end),
+           saturated: (($r[.address] // {}).s // false)}
+      ]
+    }'
   exit 0
   ;;
 --saturate)

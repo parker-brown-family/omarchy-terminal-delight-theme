@@ -17,18 +17,11 @@ only; JSON-RPC over stdio; one request line in, one response line out.
 """
 
 import json
-import os
 import subprocess
 import sys
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "td-paint", "version": "0.1.0"}
-
-RUNDIR = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "td-tint")
-
-TERMINAL_CLASSES = {
-    "foot", "Alacritty", "kitty", "com.mitchellh.ghostty", "org.wezfurlong.wezterm",
-}
 
 
 def run(argv, timeout=15):
@@ -42,18 +35,11 @@ def run(argv, timeout=15):
     return p.returncode, p.stdout.strip(), p.stderr.strip()
 
 
-def record_of(address):
-    """A window's runtime pick record: (variant|None, saturated)."""
-    try:
-        with open(os.path.join(RUNDIR, address)) as f:
-            lines = f.read().splitlines()
-    except OSError:
-        return None, False
-    variant = lines[0] if lines and lines[0] and lines[0] != "-" else None
-    return variant, "sat=1" in lines[1:]
-
-
 # ---- tools -----------------------------------------------------------------
+#
+# Every tool delegates to the CLIs; none re-derives state. The one oracle is
+# `td-tint --state` — window filtering, record parsing and monitor offsets
+# all live (and are tested) in the engine, not here.
 
 def tool_list_variants(_args):
     rc, out, err = run(["td-tint", "--json"])
@@ -62,29 +48,21 @@ def tool_list_variants(_args):
     return out, False
 
 
-def tool_list_tiles(_args):
-    rc, out, err = run(["hyprctl", "clients", "-j"])
+def tool_state(_args):
+    rc, out, err = run(["td-tint", "--state"])
     if rc != 0:
-        return err or "hyprctl failed", True
-    rc2, ws_out, _ = run(["hyprctl", "activeworkspace", "-j"])
-    active = json.loads(ws_out).get("id") if rc2 == 0 else None
-    tiles = []
-    for w in json.loads(out):
-        cls = w.get("class", "")
-        is_td = cls == "terminal-delight"
-        if cls not in TERMINAL_CLASSES and not is_td:
-            continue
-        variant, saturated = record_of(w.get("address", ""))
-        tiles.append({
-            "address": w.get("address"),
-            "class": cls,
-            "workspace": w.get("workspace", {}).get("id"),
-            "on_active_workspace": w.get("workspace", {}).get("id") == active,
-            "terminal_delight": is_td,
-            "variant": variant,
-            "saturated": saturated,
-        })
-    return json.dumps(tiles, indent=2), False
+        return err or out, True
+    return out, False
+
+
+def tool_list_tiles(_args):
+    rc, out, err = run(["td-tint", "--state"])
+    if rc != 0:
+        return err or out, True
+    try:
+        return json.dumps(json.loads(out).get("tiles", []), indent=2), False
+    except json.JSONDecodeError:
+        return "td-tint --state returned unparseable output", True
 
 
 def _tint(args, extra):
@@ -157,8 +135,13 @@ TOOLS = {
         "inputSchema": {"type": "object", "properties": {}},
         "fn": tool_list_variants,
     },
+    "state": {
+        "description": "The whole paint oracle in one document: variants, active workspace, focused monitor, and every terminal tile with class/pid/geometry/recorded variant/saturation. Same JSON as `td-tint --state`.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "fn": tool_state,
+    },
     "list_tiles": {
-        "description": "Every terminal window on the compositor with its class, workspace, recorded variant and saturation state.",
+        "description": "Just the tiles array from the oracle: every terminal window with its class, workspace, recorded variant and saturation state.",
         "inputSchema": {"type": "object", "properties": {}},
         "fn": tool_list_tiles,
     },
