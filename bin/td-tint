@@ -9,6 +9,8 @@
 #   td-tint --window 0x… cherry     aim at another terminal's window
 #   td-tint --window 0x… --clear    …or clear it
 #   td-tint --window 0x… --border-only cherry   borders only, leave the text palette be
+#   td-tint --sync       reconcile EVERY terminal window: recorded picks get the
+#                        current border rule, unrecorded fossils get reset
 #
 # Each painted window's pick is remembered at $XDG_RUNTIME_DIR/td-tint/<addr>
 # — runtime-only like everything else here (dies at logout), but enough that a
@@ -157,6 +159,47 @@ fi
 case "${1:-}" in
 --list)
   for v in $(variants); do printf '  %s  %s\n' "$(glyph_of "$v")" "$v"; done
+  exit 0
+  ;;
+--sync)
+  # The programmatic sweep: per-window border props survive theme reloads,
+  # so any window painted under an OLD rule keeps reading wrong until
+  # someone reconciles it. This makes reconciliation one idempotent verb:
+  # a recorded pick is re-framed under the CURRENT rule; a window with no
+  # record can only be bright by accident, so its props reset to the theme;
+  # records for windows that no longer exist are swept.
+  command -v hyprctl >/dev/null || die "hyprctl not found"
+  mkdir -p "$RUNDIR"
+  clients="$(hyprctl clients -j)"
+  count=0
+  while IFS= read -r addr; do
+    [[ -n $addr ]] || continue
+    rec="$RUNDIR/$addr"
+    if [[ -f $rec ]]; then
+      v="$(head -1 "$rec")"
+      c="$THEMES/$PREFIX$v/colors.toml"
+      if [[ -f $c ]]; then
+        a=$(omarchy-theme-color --file "$c" accent)
+        b=$(omarchy-theme-color --file "$c" bright_cyan "$a")
+        set_border "$addr" "rgba(${a#\#}ee) rgba(${b#\#}ee) 45deg" "rgba($(dim_hex "$a")cc)"
+      else
+        rm -f "$rec"
+      fi
+    else
+      for prop in active_border_color inactive_border_color; do
+        hyprctl dispatch \
+          "hl.dsp.window.set_prop({ prop = \"$prop\", value = \"unset\", window = \"address:$addr\" })" \
+          >/dev/null 2>&1 || true
+      done
+    fi
+    count=$((count + 1))
+  done < <(jq -r '.[] | select(.class=="foot" or .class=="Alacritty" or .class=="kitty" or .class=="com.mitchellh.ghostty" or .class=="org.wezfurlong.wezterm") | .address' <<<"$clients")
+  alive="$(jq -r '.[].address' <<<"$clients")"
+  for f in "$RUNDIR"/0x*; do
+    [[ -e $f ]] || break
+    grep -qx "$(basename "$f")" <<<"$alive" || rm -f "$f"
+  done
+  echo "synced $count terminal window(s): recorded picks re-framed, fossils reset"
   exit 0
   ;;
 --json)
