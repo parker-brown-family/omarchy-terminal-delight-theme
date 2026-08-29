@@ -175,6 +175,45 @@ assert_eq "list_tiles flags terminal-delight windows" "$(jq -r '.[] | select(.ad
 assert_eq "unknown tool is a JSON-RPC error" "$(line 8 | jq -r '.error.code')" "-32602"
 assert_eq "the state tool relays the oracle verbatim" "$(line 9 | jq -r '.result.content[0].text' | jq -r '.focused')" "0xbbb"
 
+echo "— option terminator (a variant key that looks like a flag)"
+# Deliberately last: this installs a third variant, and the counts asserted
+# above are part of the contract those blocks test.
+mkdir -p "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight--dash"
+cp "$here/fixtures/variant-cherry.toml" "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight--dash/colors.toml"
+printf '\xe2\x9e\x96\n' > "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight--dash/glyph"
+
+assert_has "--list shows a dash-leading key" "$(bash "$root/bin/td-tint" --list)" "-dash"
+
+err="$(bash "$root/bin/td-tint" -dash 2>&1)"
+if [[ $? -ne 0 ]]; then ok "a bare dash-leading key is refused, not mispainted"; else no "a bare dash-leading key is refused"; fi
+assert_has "the refusal carries the fix" "$err" "td-tint -- '-dash'"
+
+out="$(bash "$root/bin/td-tint" --window 0xaaa --border-only -- -dash 2>&1)"
+if [[ $? -eq 0 ]]; then ok "-- lets the dash-leading key through"; else no "-- lets the dash-leading key through: $out"; fi
+assert_eq "the pick is recorded under its real key" "$(rec_variant "$XDG_RUNTIME_DIR/td-tint/0xaaa")" "-dash"
+
+out="$(bash "$root/bin/td-tint" --border-only --window 0xaaa -- -dash 2>&1)"
+if [[ $? -eq 0 ]]; then ok "the leading options parse in either order"; else no "leading options parse in either order: $out"; fi
+
+err="$(bash "$root/bin/td-tint" --window 0xaaa -- --clear 2>&1)"
+if [[ $? -ne 0 ]]; then ok "-- really terminates: --clear after it is a name, not a verb"; else no "-- really terminates"; fi
+assert_has "…and is reported as an unknown variant" "$err" "no variant '--clear'"
+
+echo "— variant keys are constrained at the source"
+bad="$(grep -oP '^\[\K[^]]+' "$root/variants.toml" | grep -vE '^[a-z0-9][a-z0-9-]*$')"
+assert_eq "every shipped variant key is already safe" "$bad" ""
+# build-variants resolves its repo from its own path, so a throwaway copy
+# carrying a poisoned variants.toml exercises the gate for real.
+fake="$T/fakerepo"
+mkdir -p "$fake/bin"
+cp "$root/bin/build-variants" "$fake/bin/"
+cp "$root/colors.toml" "$fake/colors.toml"
+printf '[-evil]\nglyph = "x"\naccent = "#FF0000"\naccent_bright = "#FF8080"\nforeground = "#FFFFFF"\nbackground = "#000000"\nsurface = "#111111"\n' > "$fake/variants.toml"
+assert_has "build-variants refuses a dash-leading key" \
+  "$(cd "$fake" && python3 bin/build-variants --previews-only 2>&1)" "bad variant key"
+assert_has "install-variants' uninstall reader skips it too" \
+  "$(printf '[-evil]\n[cherry]\n' | grep -oP '^\[\K[a-z0-9][a-z0-9-]*' | tr '\n' ' ')" "cherry"
+
 echo
 if [[ "$fail" -eq 0 ]]; then
   printf '\033[32mall %d green\033[0m\n' "$pass"

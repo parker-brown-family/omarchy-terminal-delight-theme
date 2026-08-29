@@ -71,12 +71,14 @@ def _tint(args, extra):
     return (out + ("\n" + err if err else "")).strip(), rc != 0
 
 
+# `--` before every variant: the key is whatever variants.toml carries, and a
+# key beginning with a dash would otherwise reach td-tint as a flag.
 def tool_paint(args):
-    return _tint(args, [args["variant"]])
+    return _tint(args, ["--", args["variant"]])
 
 
 def tool_border_only(args):
-    return _tint(args, ["--border-only", args["variant"]])
+    return _tint(args, ["--border-only", "--", args["variant"]])
 
 
 def tool_saturate(args):

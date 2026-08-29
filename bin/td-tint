@@ -13,6 +13,8 @@
 #   td-tint --window 0x… cherry     aim at another terminal's window
 #   td-tint --window 0x… --clear    …or clear it
 #   td-tint --window 0x… --border-only cherry   borders only, leave the text palette be
+#   td-tint -- -weird    `--` ends the options, so a variant key may start
+#                        with a dash without being read as a flag
 #   td-tint --sync       reconcile EVERY terminal window: recorded picks get the
 #                        current border rule, unrecorded fossils get reset
 #   td-tint --window 0x… --saturate on|off|toggle   crank this tile's text
@@ -299,21 +301,37 @@ if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0 2>/dev/null || true; fi
 
 # --window ADDR: aim every following action at that Hyprland window instead of
 # the terminal this shell runs in.
-TARGET_ADDR=""
-if [[ "${1:-}" == "--window" ]]; then
-  TARGET_ADDR="${2:?td-tint: --window needs a Hyprland address}"
-  shift 2
-fi
-
 # --border-only: reframe the window without touching what's on the tube — the
 # repair verb for a window whose text tint is right but whose border was lost.
+#
+# A loop rather than two sequential ifs: the order between them stops being
+# the caller's problem, and a loop is what gives `--` somewhere to stop.
+TARGET_ADDR=""
 BORDER_ONLY=""
-if [[ "${1:-}" == "--border-only" ]]; then
-  BORDER_ONLY=1
-  shift
-fi
+OPTS_DONE=""
+while [[ -z $OPTS_DONE && $# -gt 0 ]]; do
+  case "$1" in
+    --window)      TARGET_ADDR="${2:?td-tint: --window needs a Hyprland address}"; shift 2 ;;
+    --border-only) BORDER_ONLY=1; shift ;;
+    *)             OPTS_DONE=1 ;;
+  esac
+done
+
+# Set by the `--` arm below. Everything after the terminator is positional,
+# which is the difference between a bad flag and a variant key that looks like
+# one — and the only thing that can tell them apart.
+TERMINATED=""
 
 case "${1:-}" in
+--)
+  # The option terminator. Variant keys are third-party input — whatever
+  # sections variants.toml happens to carry, from any hand that edits it — so
+  # a key beginning with `-` is otherwise read as a flag by every caller:
+  # `td-tint <key>`, the MCP server, the Terminal Paint plugin. Shifting here
+  # falls out of the case to the positional path below.
+  TERMINATED=1
+  shift
+  ;;
 --list)
   for v in $(variants); do printf '  %s  %s\n' "$(glyph_of "$v")" "$v"; done
   exit 0
@@ -484,6 +502,13 @@ case "${1:-}" in
 esac
 
 variant="${1:-}"
+
+# Without the terminator a leading dash is an option the parser did not
+# recognise, not a variant. Saying that beats "no variant '--foo'" — and the
+# message carries the fix, which is the only place a caller will look for it.
+if [[ -z $TERMINATED && $variant == -* ]]; then
+  die "unknown option '$variant' — if that is a variant key, end the options first: td-tint -- '$variant'"
+fi
 
 if [[ -z $variant ]]; then
   # Window mode is scriptable, not interactive — the picker is the overlay.

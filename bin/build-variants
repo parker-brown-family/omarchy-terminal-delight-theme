@@ -341,6 +341,15 @@ def main():
 
     variants = tomllib.loads((REPO / "variants.toml").read_text())
     base = tomllib.loads((REPO / "colors.toml").read_text())
+
+    # The key becomes a directory name (terminal-delight-<key>) and reaches
+    # td-tint as a positional argument. Constraining it here is what makes
+    # both safe by construction, instead of every consumer escaping it.
+    for key in variants:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", key):
+            sys.exit(f"variants.toml: bad variant key {key!r} — lowercase "
+                     "letters, digits and dashes only, starting with a letter "
+                     "or digit")
     repo_previews = REPO / "previews"
     repo_previews.mkdir(exist_ok=True)
 

@@ -29,7 +29,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
       echo "removed $dir"
       removed=$((removed + 1))
     fi
-  done < <(grep -oP '^\[\K[a-z0-9-]+' "$here/variants.toml")
+  done < <(grep -oP '^\[\K[a-z0-9][a-z0-9-]*' "$here/variants.toml")
   echo "${removed} variant(s) removed. The base Terminal Delight theme is untouched."
   exit 0
 fi
