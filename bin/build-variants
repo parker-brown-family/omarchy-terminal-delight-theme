@@ -11,11 +11,18 @@ Nothing here is clever. Six colours in, one theme out.
 
 import argparse
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import tomllib
+
+# Arch ships ImageMagick 7 (`magick`); Ubuntu — including the CI runner —
+# still ships IM6, where the same classic CLI lives at `convert`. Every
+# invocation here is classic-style (input, operations, output), which both
+# accept, so resolving the binary is the whole portability story.
+MAGICK = shutil.which("magick") or shutil.which("convert") or "magick"
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 TILE_W, TILE_H = 1600, 900
@@ -159,11 +166,13 @@ local home = os.getenv("HOME")
 local shader = home .. "/.local/state/omarchy/current/theme/crt-glass.frag"
 
 local active_border_color = {{ colors = {{ "rgba({accent}ee)", "rgba({bright}ee)" }}, angle = 45 }}
-local inactive_border_color = "rgba({inactive}aa)"
+-- Faint on purpose: the border is the FOCUS signal. Only the active tile
+-- wears the loud gradient; everything else recedes.
+local inactive_border_color = "rgba({inactive}55)"
 
 hl.config({{
   general = {{
-    border_size = 2,
+    border_size = 3,
     col = {{
       active_border = active_border_color,
       inactive_border = inactive_border_color,
@@ -187,7 +196,8 @@ hl.config({{
     inactive_opacity = 0.86,
 
     dim_inactive = true,
-    dim_strength = 0.18,
+    -- deep enough that the powered tile is unmistakable in a wall of tubes
+    dim_strength = 0.28,
 
     blur = {{
       enabled = true,
@@ -247,40 +257,40 @@ def preview_tile(key, v, p, out):
         td = pathlib.Path(td)
 
         # the field: void, with the hue blooming out of the centre
-        run(["magick", "-size", f"{TILE_W}x{TILE_H}", f"radial-gradient:{mix(bg, acc, 0.42)}-{bg}",
+        run([MAGICK, "-size", f"{TILE_W}x{TILE_H}", f"radial-gradient:{mix(bg, acc, 0.42)}-{bg}",
              td / "field.png"])
 
         # 4px scanlines, the same period as the theme's own glass
-        run(["magick", "-size", "4x4", "xc:none", "-fill", "rgba(0,0,0,0.42)",
+        run([MAGICK, "-size", "4x4", "xc:none", "-fill", "rgba(0,0,0,0.42)",
              "-draw", "rectangle 0,0 3,0", td / "line.png"])
-        run(["magick", td / "field.png", "-write", "mpr:f", "+delete",
+        run([MAGICK, td / "field.png", "-write", "mpr:f", "+delete",
              "mpr:f", "(", td / "line.png", "-write", "mpr:l", "+delete",
              "-size", f"{TILE_W}x{TILE_H}", "tile:mpr:l", ")",
              "-compose", "over", "-composite", td / "scan.png"])
 
         # the glyph
-        run(["magick", "-background", "none",
+        run([MAGICK, "-background", "none",
              f'pango:<span font="Noto Color Emoji 210">{v["glyph"]}</span>',
              "-trim", "+repage", "-resize", "300x300", td / "glyph.png"])
 
         # the label, letterspaced small caps in the accent
         label = key.upper()
-        run(["magick", "-background", "none",
+        run([MAGICK, "-background", "none",
              f'pango:<span font="{LABEL_FONT} 30" foreground="{acc}" '
              f'letter_spacing="18000">{label}</span>',
              "-trim", "+repage", td / "label.png"])
 
         # phosphor bloom: the glyph's own silhouette, blown out in the accent
-        run(["magick", td / "glyph.png", "-background", "none", "-gravity", "center",
+        run([MAGICK, td / "glyph.png", "-background", "none", "-gravity", "center",
              "-extent", "480x480", "-alpha", "extract", "-blur", "0x44",
              "-level", "0%,55%", td / "mask.png"])
-        run(["magick", "-size", "480x480", f"xc:{acc}", td / "mask.png",
+        run([MAGICK, "-size", "480x480", f"xc:{acc}", td / "mask.png",
              "-alpha", "off", "-compose", "copy_opacity", "-composite",
              "-channel", "A", "-evaluate", "multiply", "0.42", "+channel",
              td / "bloom.png"])
 
         # compose: bloom, glyph above centre, label under it
-        run(["magick", td / "scan.png",
+        run([MAGICK, td / "scan.png",
              td / "bloom.png", "-gravity", "center", "-geometry", "+0-70", "-composite",
              td / "glyph.png", "-gravity", "center", "-geometry", "+0-70", "-composite",
              td / "label.png", "-gravity", "center", "-geometry", "+0+130", "-composite",
@@ -297,16 +307,16 @@ def preview_tile(key, v, p, out):
         for i, c in enumerate(swatches):
             x = x0 + i * (sw + gap)
             draw += ["-fill", c, "-draw", f"roundrectangle {x},{y0} {x+sw},{y0+18} 9,9"]
-        run(["magick", td / "body.png", *draw, td / "swatch.png"])
+        run([MAGICK, td / "body.png", *draw, td / "swatch.png"])
 
         # the vignette first, so the glass edge sits on top of it and survives
-        run(["magick", "-size", f"{TILE_W}x{TILE_H}",
+        run([MAGICK, "-size", f"{TILE_W}x{TILE_H}",
              "radial-gradient:#00000000-#000000A0", td / "vig.png"])
-        run(["magick", td / "swatch.png", td / "vig.png",
+        run([MAGICK, td / "swatch.png", td / "vig.png",
              "-compose", "over", "-composite", td / "dim.png"])
 
         # glass: a squircle edge in the gradient pair
-        run(["magick", td / "dim.png",
+        run([MAGICK, td / "dim.png",
              "-stroke", acc, "-strokewidth", "5", "-fill", "none",
              "-draw", f"roundrectangle 12,12 {TILE_W-13},{TILE_H-13} 36,36",
              "-stroke", br, "-strokewidth", "2",
@@ -323,6 +333,9 @@ def main():
                     help="where the theme dirs go (default ~/.config/omarchy/themes)")
     ap.add_argument("--previews-only", action="store_true",
                     help="only refresh previews/ in the repo")
+    ap.add_argument("--reuse-previews", action="store_true",
+                    help="skip tile drawing and use previews/ as-is — the fast path "
+                         "when only shaders/lua changed, since tiles depend on colours alone")
     ap.add_argument("--only", default=None, help="build just this variant")
     args = ap.parse_args()
 
@@ -339,8 +352,14 @@ def main():
             continue
         p = palette(v, base)
 
-        # the repo's own gallery copy, always refreshed
-        preview_tile(key, v, p, repo_previews / f"{key}.png")
+        # The gallery tile is pure colour — nothing else in a variant reaches it —
+        # so a shader-only rebuild may reuse it instead of paying ~30 s of
+        # ImageMagick per variant.
+        if args.reuse_previews:
+            if not (repo_previews / f"{key}.png").exists():
+                sys.exit(f"--reuse-previews, but previews/{key}.png is missing — run once without it")
+        else:
+            preview_tile(key, v, p, repo_previews / f"{key}.png")
 
         if args.previews_only:
             print(f"  {v['glyph']}  {key:<12} preview")
@@ -350,14 +369,36 @@ def main():
         (theme / "backgrounds").mkdir(parents=True, exist_ok=True)
         (theme / "colors.toml").write_text(colors_toml(key, v, p))
         (theme / "hyprland.lua").write_text(hyprland_lua(key, v, p))
-        shutil.copy2(REPO / "crt-glass.frag", theme / "crt-glass.frag")
+        # The monitor pass, retinted: the variant's own hue drives the phosphor
+        # wash, scanline tint and tracking band; its bright partner (pulled 60%
+        # toward white, the way a reflection reads) drives the glass glare. All
+        # the other knobs in the CONFIG block ride through untouched, so a
+        # td-monitor tweak survives a rebuild only in the repo copy — which is
+        # the point: variants.toml owns colour, crt-glass.frag owns the set.
+        frag = (REPO / "crt-glass.frag").read_text()
+        pr, pg, pb = (c / 255 for c in rgb(v["accent"]))
+        frag = re.sub(
+            r"const vec3  PHOSPHOR   = vec3\([^)]*\);.*",
+            f'const vec3  PHOSPHOR   = vec3({pr:.3f}, {pg:.3f}, {pb:.3f}); '
+            f'// {v["accent"]} — retinted by build-variants',
+            frag,
+        )
+        br_, bg_, bb_ = (c / 255 for c in rgb(v["accent_bright"]))
+        gr, gg, gb = (round(0.4 * c + 0.6, 3) for c in (br_, bg_, bb_))
+        frag = re.sub(
+            r"const vec3  GLARE_TINT = vec3\([^)]*\);.*",
+            f"const vec3  GLARE_TINT = vec3({gr}, {gg}, {gb}); "
+            f'// {v["accent_bright"]} pulled toward white',
+            frag,
+        )
+        (theme / "crt-glass.frag").write_text(frag)
         shutil.copy2(REPO / "icons.theme", theme / "icons.theme")
         # td-tint reads this to label the terminal it just tinted
         (theme / "glyph").write_text(v["glyph"] + "\n")
         shutil.copy2(repo_previews / f"{key}.png", theme / "preview.png")
 
         # the base background, pulled toward the variant's hue
-        run(["magick", REPO / "backgrounds/0-void-tube.jpg",
+        run([MAGICK, REPO / "backgrounds/0-void-tube.jpg",
              "-modulate", "100,92", "-fill", v["accent"], "-tint", "22",
              "-quality", "88", theme / "backgrounds" / f"0-{key}-tube.jpg"])
 

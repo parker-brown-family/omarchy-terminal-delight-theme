@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Test double with the real contract: --file F KEY [FALLBACK] → "#RRGGBB".
+f=""
+args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --file) f="$2"; shift 2 ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+key="${args[0]:?key required}"
+fb="${args[1]:-}"
+v=$(grep -E "^${key}[[:space:]]*=" "$f" 2>/dev/null | head -1 | sed -E 's/.*"(#[0-9A-Fa-f]{6})".*/\1/')
+if [[ $v == \#* ]]; then
+  echo "$v"
+elif [[ -n $fb ]]; then
+  echo "$fb"
+else
+  exit 1
+fi

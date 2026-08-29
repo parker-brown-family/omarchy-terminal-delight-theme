@@ -1,0 +1,6 @@
+[
+  { "class": "foot", "pid": 100, "address": "0xaaa", "at": [0, 0], "size": [400, 300], "workspace": { "id": 1, "name": "1" } },
+  { "class": "foot", "pid": 200, "address": "0xbbb", "at": [400, 0], "size": [400, 300], "workspace": { "id": 1, "name": "1" } },
+  { "class": "google-chrome", "pid": 300, "address": "0xccc", "at": [0, 300], "size": [800, 300], "workspace": { "id": 1, "name": "1" } },
+  { "class": "terminal-delight", "pid": 400, "address": "0xddd", "at": [800, 0], "size": [400, 600], "workspace": { "id": 1, "name": "1" } }
+]

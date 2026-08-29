@@ -48,6 +48,51 @@ is drawn for. Both are reversed by `./install-curve.sh --uninstall`.
 **Log out and back in.** Hyprland reads its shaders once at startup
 (`m_shadersInitialized`, 0.56); editing them on a running session does nothing.
 
+## The monitor has knobs
+
+The glass is not a fixed effect any more — it is Terminal Delight's own
+display stack, ported dial for dial from the terminal (`app/src/crt.rs` and
+its CRT render pass): scanlines with the phosphor tint line, the 160px
+tracking band that sweeps down and rests, the occasional stepped flicker
+burst, the glass glare hotspot with its diagonal streak, centre phosphor
+bloom, vignette — and a monitor-OSD grade (brightness / contrast /
+saturation / gamma) applied last, exactly the order the terminal grades its
+own tube. Each variant's glass glows in its own hue: the phosphor, scanline
+tint, tracking band and glare are retinted per variant by `bin/build-variants`.
+
+Every dial is a `const` at the top of `crt-glass.frag` — the MONITOR CONFIG
+block is the config surface — and `td-monitor` turns them without a relogin:
+
+```bash
+td-monitor                       # what every knob is set to
+td-monitor set TRACKING 0.8      # a hotter roll bar
+td-monitor set FLICKER 0 SCAN 0.1   # calm it down
+td-monitor off                   # lift the glass entirely
+td-monitor reset                 # pristine defaults
+```
+
+A `set` is validated with `glslangValidator` before it touches the live
+compositor, applied across the whole installed family (a monitor setting is
+not a per-colourway thing), and recompiled in place. Hand-editing the block
+works exactly as well — the tool is a convenience, not a gate.
+
+**The glare lives on the tiles.** Each window's glass glare (the hotspot +
+diagonal streak) ships in the per-window warp shaders — `install-curve.sh`,
+relogin to arm — so every tile catches the room light like a Terminal Delight
+pane, and Terminal Delight's own windows (which draw their own glass) are
+excluded by their rounding-0 rule. The monitor pass's `GLARE` knob is the
+WHOLE-SCREEN version and defaults to 0; without the curve installed, raise it
+(`td-monitor set GLARE 0.42`) for one big sheet of glass instead.
+
+**Motion is opt-in.** Hyprland treats any screen shader that declares a
+`time` uniform as animated and turns damage tracking off for it — its own
+warning says the quiet part: the whole screen redraws every frame. So the
+glass ships STILL (`ANIMATED 0`): no clock, no warning, no cost — scanlines,
+glare, bloom and grade are all static effects. Turning any motion knob
+(`TRACKING`, `FLICKER`, `JIGGLE`) above zero raises `ANIMATED` for you, and
+zeroing all three drops it again; `td-monitor set ANIMATED 1` forces it. The
+tracking band earns its GPU bill — decide per moment, not per install.
+
 ## What the warp does, and what it costs
 
 The warp compiles only into the rounded-window shader variant, so it keys off
@@ -157,6 +202,14 @@ The window it recolours is found by walking up `/proc` from the calling shell
 until a pid matches a Hyprland client, so it works from inside tmux and from
 a script, not only from the shell you are typing in.
 
+Every pick is remembered at `$XDG_RUNTIME_DIR/td-tint/<addr>` (runtime-only,
+dies at logout), and a `theme-set.d` hook installed by `install-variants.sh`
+runs `td-tint --sync` after every Omarchy theme switch — so recorded picks
+keep their identity, everything else adopts the new theme's borders, and no
+window is ever left wearing yesterday's colours. Per-window border props
+survive switches on their own (Hyprland's `set_prop` has no working unset),
+which is exactly why the hook exists.
+
 Terminal Delight itself is not the target here — it renders its own palette
 and has a per-pane colour tray for the same job. `td-tint` is for foot,
 Alacritty, Ghostty, kitty: anything that honours OSC 4/10/11.
@@ -180,13 +233,16 @@ rather than in any theme:
 |---|---|
 | `colors.toml` | the palette every Omarchy template is generated from |
 | `backgrounds/` | Void Tube |
-| `crt-glass.frag` | full-screen finisher: scanlines, centre bloom, vignette. `CURV = 0` — the per-window warp carries the curve, so raise it only if you want the whole desktop in one tube |
+| `crt-glass.frag` | the MONITOR pass — Terminal Delight's display stack for the whole desktop: px-true scanlines, the rolling tracking band, stepped flicker, glass glare, phosphor bloom, vignette, and a brightness/contrast/saturation/gamma grade. Every dial is a `const` in its MONITOR CONFIG block; `CURV = 0` because the per-window warp carries the curve |
 | `shaders/surface.frag`, `shaders/ext.frag` | the per-window warp |
 | `hyprland.lua` | rounding, blur, borders, screen shader. Applied if you copy this theme into `~/.config/omarchy/themes/` by hand; dropped if you install it from this repo |
 | `install-curve.sh` | the opt-in installer for what the drop takes away |
 | `variants.toml` | the variant set: six keys each, the only file you edit |
 | `bin/build-variants` | derives a full theme from those six keys, and draws the tile |
 | `bin/td-tint` | tint one terminal — text and border — without touching the theme |
+| `bin/td-monitor` | turn the monitor's knobs — rewrite the CONFIG block across the installed family, validate, recompile live |
+| `bin/td-mcp` | the paint surface as MCP tools for agents — see "Agents paint too" |
+| `test/run` | the hermetic test suite (stubs for hyprctl/omarchy-theme-*; no compositor needed) |
 | `install-variants.sh` | builds every variant into `~/.config/omarchy/themes/` |
 | `previews/` | the tiles, as the theme grid shows them |
 
@@ -194,6 +250,35 @@ Copying the directory into `~/.config/omarchy/themes/terminal-delight/`
 yourself keeps all of it, `hyprland.lua` included — a theme you wrote stays
 yours. Then `install-curve.sh` only needs to place the shaders, and it will
 tell you it is skipping the rest.
+
+## Agents paint too
+
+`bin/td-mcp` is the whole surface as an MCP server — stdlib Python, stdio,
+register it once:
+
+```bash
+claude mcp add td-paint -- ~/.local/bin/td-mcp
+```
+
+Tools: `list_variants`, `list_tiles` (every terminal window with its recorded
+variant + saturation), `paint`, `border_only`, `saturate`, `clear`, `sync`,
+`paint_panes` (Terminal Delight's per-pane picker over its control socket),
+`monitor_knobs`, `monitor_set`. Deliberately thin: every tool delegates to
+the same CLI a human runs, so there is one behaviour and the MCP layer can
+never drift from it.
+
+## Tests
+
+```bash
+./test/run
+```
+
+Dependency-free and hermetic: `XDG_*` point into a throwaway tree and
+hyprctl / omarchy-theme-color / omarchy-theme-osc / glslangValidator /
+terminal-delight are logging stubs on `PATH`, so the suite asserts against
+files and call logs, never your live compositor. CI (GitHub Actions) runs
+the suite, shellcheck at warning level, `td-mcp` byte-compilation, and
+compiles every generated frag in BOTH `ANIMATED` states.
 
 ## Light mode
 

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Test double. Logs every call; answers -j queries from fixtures. The log is
+# the assertion surface: tests grep it instead of trusting exit codes.
+log="${TD_TEST_LOG:?}/hyprctl.log"
+printf '%s\n' "$*" >>"$log"
+case "$*" in
+  "clients -j" | "-j clients")               cat "${TD_TEST_FIXTURES:?}/clients.json" ;;
+  "activeworkspace -j" | "-j activeworkspace") cat "${TD_TEST_FIXTURES:?}/activeworkspace.json" ;;
+  "monitors -j" | "-j monitors")             cat "${TD_TEST_FIXTURES:?}/monitors.json" ;;
+  "activewindow -j" | "-j activewindow")     cat "${TD_TEST_FIXTURES:?}/activewindow.json" ;;
+  dispatch*)                                 : ;;
+  eval*)                                     echo ok ;;
+  *)                                         echo "{}" ;;
+esac

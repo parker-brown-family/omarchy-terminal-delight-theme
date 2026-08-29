@@ -73,6 +73,12 @@ layout(location = 1) out vec4 mirrorColor;
 #if USE_ROUNDING && !USE_MOTION_BLUR
 const float TD_K1 = 0.14;
 const float TD_K2 = 0.06;
+// Per-tile glass glare — the terminal's own hotspot + streak formula
+// (crt_pass), in window-local UV, so every tile catches the room light the
+// way a TD pane does. TD's own windows are rounding-0 and never take this
+// branch — they draw their own glass.
+const float TD_GLARE      = 0.42;
+const vec3  TD_GLARE_TINT = vec3(0.72, 1.00, 0.78);
 #endif
 // ---- end terminal-delight ----
 
@@ -107,6 +113,15 @@ void main() {
 
 #if USE_ROUNDING && !USE_MOTION_BLUR
     pixColor *= td_edge; // terminal-delight: transparent bezel outside the tube
+    if (TD_GLARE > 0.0) {
+        vec2  g_o   = (v_texcoord - vec2(0.18, 0.10)) / vec2(0.34, 0.18);
+        float g_hot = exp(-dot(g_o, g_o) * 2.2);
+        float g_bnd = (1.0 - smoothstep(0.0, 0.10, abs(v_texcoord.y + v_texcoord.x * 0.22 - 0.17)))
+                    * (1.0 - smoothstep(0.0, 0.72, v_texcoord.x))
+                    * (1.0 - smoothstep(0.0, 0.42, v_texcoord.y));
+        float g_amt = clamp((g_hot * 0.58 + g_bnd * 0.34) * TD_GLARE, 0.0, 1.0) * td_edge;
+        pixColor.rgb += TD_GLARE_TINT * g_amt * pixColor.a;
+    }
 #endif
 
 #if USE_DISCARD && !USE_BLUR

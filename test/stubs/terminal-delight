@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Test double for the ctl client: log and succeed.
+printf '%s\n' "$*" >>"${TD_TEST_LOG:?}/terminal-delight.log"
+echo "stub-ok"

@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""td-mcp — the paint surface as an MCP server.
+
+An agent adds this once:
+
+    claude mcp add td-paint -- ~/.local/bin/td-mcp
+
+and can then SEE the workspace (tiles, their recorded picks and saturation,
+the installed variants) and PAINT it (variant per window, saturate toggles,
+clears, whole-box sync, monitor knobs, Terminal Delight's per-pane picker)
+without shelling out or knowing any binary's argv.
+
+Deliberately thin: every tool delegates to the same commands a human runs —
+td-tint, td-monitor, terminal-delight ctl, hyprctl — so there is exactly one
+behaviour to test and the MCP layer can never drift from the CLI. stdlib
+only; JSON-RPC over stdio; one request line in, one response line out.
+"""
+
+import json
+import subprocess
+import sys
+
+PROTOCOL_VERSION = "2024-11-05"
+SERVER_INFO = {"name": "td-paint", "version": "0.1.0"}
+
+
+def run(argv, timeout=15):
+    """Run a delegate command; the MCP result is its honest stdout/stderr."""
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        return 127, "", f"{argv[0]}: not found on PATH"
+    except subprocess.TimeoutExpired:
+        return 124, "", f"{argv[0]}: timed out"
+    return p.returncode, p.stdout.strip(), p.stderr.strip()
+
+
+# ---- tools -----------------------------------------------------------------
+#
+# Every tool delegates to the CLIs; none re-derives state. The one oracle is
+# `td-tint --state` — window filtering, record parsing and monitor offsets
+# all live (and are tested) in the engine, not here.
+
+def tool_list_variants(_args):
+    rc, out, err = run(["td-tint", "--json"])
+    if rc != 0:
+        return err or out, True
+    return out, False
+
+
+def tool_state(_args):
+    rc, out, err = run(["td-tint", "--state"])
+    if rc != 0:
+        return err or out, True
+    return out, False
+
+
+def tool_list_tiles(_args):
+    rc, out, err = run(["td-tint", "--state"])
+    if rc != 0:
+        return err or out, True
+    try:
+        return json.dumps(json.loads(out).get("tiles", []), indent=2), False
+    except json.JSONDecodeError:
+        return "td-tint --state returned unparseable output", True
+
+
+def _tint(args, extra):
+    address = args["address"]
+    rc, out, err = run(["td-tint", "--window", address] + extra)
+    return (out + ("\n" + err if err else "")).strip(), rc != 0
+
+
+def tool_paint(args):
+    return _tint(args, [args["variant"]])
+
+
+def tool_border_only(args):
+    return _tint(args, ["--border-only", args["variant"]])
+
+
+def tool_saturate(args):
+    return _tint(args, ["--saturate", args.get("mode", "toggle")])
+
+
+def tool_clear(args):
+    return _tint(args, ["--clear"])
+
+
+def tool_sync(_args):
+    rc, out, err = run(["td-tint", "--sync"])
+    return (out + ("\n" + err if err else "")).strip(), rc != 0
+
+
+def tool_paint_panes(args):
+    action = args.get("action", "toggle")
+    scope = args.get("scope", "active")
+    argv = ["terminal-delight", "ctl", "paint", action]
+    if scope == "all":
+        argv.append("--all")
+    rc, out, err = run(argv)
+    return (out + ("\n" + err if err else "")).strip(), rc != 0
+
+
+def tool_monitor_knobs(_args):
+    rc, out, err = run(["td-monitor", "list"])
+    if rc != 0:
+        return err or out, True
+    knobs = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[1] == "=":
+            knobs[parts[0]] = parts[2]
+    return json.dumps(knobs, indent=2), False
+
+
+def tool_monitor_set(args):
+    rc, out, err = run(["td-monitor", "set", args["knob"], str(args["value"])])
+    return (out + ("\n" + err if err else "")).strip(), rc != 0
+
+
+def addr_schema(extra_props=None, extra_required=None):
+    props = {"address": {"type": "string", "description": "Hyprland window address, e.g. 0x5611ca…"}}
+    props.update(extra_props or {})
+    return {
+        "type": "object",
+        "properties": props,
+        "required": ["address"] + (extra_required or []),
+    }
+
+
+TOOLS = {
+    "list_variants": {
+        "description": "The installed Terminal Delight variant set: key, glyph, accent, partner colour.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "fn": tool_list_variants,
+    },
+    "state": {
+        "description": "The whole paint oracle in one document: variants, active workspace, focused monitor, and every terminal tile with class/pid/geometry/recorded variant/saturation. Same JSON as `td-tint --state`.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "fn": tool_state,
+    },
+    "list_tiles": {
+        "description": "Just the tiles array from the oracle: every terminal window with its class, workspace, recorded variant and saturation state.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "fn": tool_list_tiles,
+    },
+    "paint": {
+        "description": "Paint one terminal window with a variant: OSC palette down its tty plus identity border (bright focused, dimmed unfocused).",
+        "inputSchema": addr_schema({"variant": {"type": "string", "description": "variant key from list_variants"}}, ["variant"]),
+        "fn": tool_paint,
+    },
+    "border_only": {
+        "description": "Re-frame a window's identity border without touching its text palette (the repair verb).",
+        "inputSchema": addr_schema({"variant": {"type": "string"}}, ["variant"]),
+        "fn": tool_border_only,
+    },
+    "saturate": {
+        "description": "Crank a tile's text toward the Terminal Delight phosphor look, or pour it back.",
+        "inputSchema": addr_schema({"mode": {"type": "string", "enum": ["on", "off", "toggle"]}}),
+        "fn": tool_saturate,
+    },
+    "clear": {
+        "description": "Hand a tile back to the desktop theme: palette, borders and record.",
+        "inputSchema": addr_schema(),
+        "fn": tool_clear,
+    },
+    "sync": {
+        "description": "Reconcile every terminal window: recorded picks re-framed and re-saturated under current rules, unrecorded windows pinned to theme borders, dead records swept. Idempotent.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "fn": tool_sync,
+    },
+    "paint_panes": {
+        "description": "Raise or fold Terminal Delight's own per-pane picker via its control socket.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["on", "off", "toggle"]},
+                "scope": {"type": "string", "enum": ["active", "all"]},
+            },
+        },
+        "fn": tool_paint_panes,
+    },
+    "monitor_knobs": {
+        "description": "The desktop monitor pass's current knob values (scanlines, tracking, flicker, glare, grade…).",
+        "inputSchema": {"type": "object", "properties": {}},
+        "fn": tool_monitor_knobs,
+    },
+    "monitor_set": {
+        "description": "Turn a monitor knob (validated before it touches the live compositor, recompiled in place).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"knob": {"type": "string"}, "value": {"type": ["number", "string"]}},
+            "required": ["knob", "value"],
+        },
+        "fn": tool_monitor_set,
+    },
+}
+
+
+# ---- protocol ---------------------------------------------------------------
+
+def reply(id_, result=None, error=None):
+    msg = {"jsonrpc": "2.0", "id": id_}
+    if error is not None:
+        msg["error"] = error
+    else:
+        msg["result"] = result
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+
+def handle(req):
+    method = req.get("method", "")
+    id_ = req.get("id")
+    if id_ is None:  # notification — nothing to say
+        return
+    if method == "initialize":
+        reply(id_, {
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {"tools": {}},
+            "serverInfo": SERVER_INFO,
+        })
+    elif method == "ping":  # spec liveness check — an empty result IS the pong
+        reply(id_, {})
+    elif method == "tools/list":
+        reply(id_, {"tools": [
+            {"name": name, "description": t["description"], "inputSchema": t["inputSchema"]}
+            for name, t in TOOLS.items()
+        ]})
+    elif method == "tools/call":
+        params = req.get("params", {})
+        name = params.get("name", "")
+        tool = TOOLS.get(name)
+        if tool is None:
+            reply(id_, error={"code": -32602, "message": f"unknown tool: {name}"})
+            return
+        try:
+            text, is_error = tool["fn"](params.get("arguments", {}) or {})
+        except KeyError as e:
+            text, is_error = f"missing required argument: {e}", True
+        except Exception as e:  # a tool bug must answer, not kill the server
+            text, is_error = f"{type(e).__name__}: {e}", True
+        result = {"content": [{"type": "text", "text": text or "(no output)"}]}
+        if is_error:
+            result["isError"] = True
+        reply(id_, result)
+    else:
+        reply(id_, error={"code": -32601, "message": f"unknown method: {method}"})
+
+
+def main():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # garbage line, silently dropped — same policy as TD's MCP
+        handle(req)
+
+
+if __name__ == "__main__":
+    main()

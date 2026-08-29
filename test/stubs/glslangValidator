@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Test double: record what was validated, approve everything. Real validation
+# runs in CI's frag job against the actual tool.
+printf '%s\n' "$*" >>"${TD_TEST_LOG:?}/glslang.log"
+exit 0

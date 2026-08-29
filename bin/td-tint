@@ -5,6 +5,22 @@
 #   td-tint cherry       this terminal is now the cherry one
 #   td-tint --clear      back to whatever the desktop theme says
 #   td-tint --list       what is installed
+#   td-tint --json       the same list as JSON (key/glyph/accent/partner)
+#   td-tint --state      the ORACLE: one JSON document of everything — variants,
+#                        active workspace, focused monitor, and every terminal
+#                        tile with its class/pid/geometry/pick/saturation.
+#                        MCP and the overlay render this; they derive nothing.
+#   td-tint --window 0x… cherry     aim at another terminal's window
+#   td-tint --window 0x… --clear    …or clear it
+#   td-tint --window 0x… --border-only cherry   borders only, leave the text palette be
+#   td-tint --sync       reconcile EVERY terminal window: recorded picks get the
+#                        current border rule, unrecorded fossils get reset
+#   td-tint --window 0x… --saturate on|off|toggle   crank this tile's text
+#                        saturation to the Terminal Delight look (and back)
+#
+# Each painted window's pick is remembered at $XDG_RUNTIME_DIR/td-tint/<addr>
+# — runtime-only like everything else here (dies at logout), but enough that a
+# border repair restores an identity instead of guessing or erasing it.
 #
 # An Omarchy theme is global by design: switching it repaints every terminal
 # at once, which is the opposite of being able to tell them apart. So this
@@ -19,6 +35,13 @@ set -euo pipefail
 THEMES="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/themes"
 PREFIX="terminal-delight-"
 CURRENT="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme/colors.toml"
+RUNDIR="${XDG_RUNTIME_DIR:-/tmp}/td-tint"
+SAT_FACTOR="1.6"  # how hard SATURATE cranks — tuned against the TD screenshots
+
+# THE terminal-class registry — every consumer (--sync, --state, and through
+# --state the MCP server and the overlay) reads this one constant. Add a
+# terminal here and the whole system sees it.
+TERM_CLASSES='["foot","Alacritty","kitty","com.mitchellh.ghostty","org.wezfurlong.wezterm"]'
 
 die() { echo "td-tint: $*" >&2; exit 1; }
 
@@ -76,31 +99,384 @@ for pid in chain:
 ' 2>/dev/null
 }
 
-set_border() {
-  local addr="$1" value="$2" prop
-  [[ -n $addr ]] || return 0
-  for prop in active_border_color inactive_border_color; do
-    hyprctl dispatch \
-      "hl.dsp.window.set_prop({ prop = \"$prop\", value = \"$value\", window = \"address:$addr\" })" \
-      >/dev/null 2>&1 || true
-  done
+# A dim of the same hue: scale each RGB channel to 35% so the unfocused
+# border keeps the variant's identity at a fraction of its luminance. Alpha
+# alone cannot do this — a neon accent at low alpha still reads bright over a
+# dark tube, which is how "unfocused" ended up nearly as loud as "focused".
+dim_hex() {
+  local hex="${1#\#}" r g b
+  r=$(( 16#${hex:0:2} * 35 / 100 ))
+  g=$(( 16#${hex:2:2} * 35 / 100 ))
+  b=$(( 16#${hex:4:2} * 35 / 100 ))
+  printf '%02X%02X%02X' "$r" "$g" "$b"
 }
+
+# Crank one colour's HSL saturation by a factor, hue and lightness untouched.
+# awk carries the float math bash doesn't have; near-black backgrounds barely
+# move (low lightness pins them), which is exactly why saturating the whole
+# palette uniformly is safe — text ignites, the void stays void.
+sat_hex() {
+  awk -v hex="${1#\#}" -v f="$2" '
+    function hue2rgb(p, q, t) {
+      if (t < 0) t += 1; if (t > 1) t -= 1
+      if (t < 1/6) return p + (q - p) * 6 * t
+      if (t < 1/2) return q
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6
+      return p
+    }
+    BEGIN {
+      r = strtonum("0x" substr(hex,1,2)) / 255
+      g = strtonum("0x" substr(hex,3,2)) / 255
+      b = strtonum("0x" substr(hex,5,2)) / 255
+      mx = r > g ? r : g; mx = mx > b ? mx : b
+      mn = r < g ? r : g; mn = mn < b ? mn : b
+      l = (mx + mn) / 2; d = mx - mn; h = 0; s = 0
+      if (d != 0) {
+        s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn)
+        if (mx == r)      h = (g - b) / d + (g < b ? 6 : 0)
+        else if (mx == g) h = (b - r) / d + 2
+        else              h = (r - g) / d + 4
+        h = h / 6
+      }
+      s = s * f; if (s > 1) s = 1
+      if (s == 0) { r = l; g = l; b = l }
+      else {
+        q = l < 0.5 ? l * (1 + s) : l + s - l * s
+        p = 2 * l - q
+        r = hue2rgb(p, q, h + 1/3); g = hue2rgb(p, q, h); b = hue2rgb(p, q, h - 1/3)
+      }
+      printf "%02X%02X%02X", r * 255 + 0.5, g * 255 + 0.5, b * 255 + 0.5
+    }'
+}
+
+# Phosphor-ize: take the ACCENT's hue with a floored-high saturation and the
+# original colour's lightness. This is Terminal Delight's monochrome collapse
+# — the move that makes TEXT glow. Multiplying the saturation of cream-white
+# foreground does nothing (S≈0 stays ≈0); the TD screenshots read the way
+# they do because the text ADOPTS the phosphor, it doesn't just deepen.
+phos_hex() { # hex accenthex
+  awk -v hex="${1#\#}" -v acc="${2#\#}" '
+    function hue2rgb(p, q, t) {
+      if (t < 0) t += 1; if (t > 1) t -= 1
+      if (t < 1/6) return p + (q - p) * 6 * t
+      if (t < 1/2) return q
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6
+      return p
+    }
+    function hsl_of(r, g, b,   mx, mn, d) {
+      mx = r > g ? r : g; mx = mx > b ? mx : b
+      mn = r < g ? r : g; mn = mn < b ? mn : b
+      L = (mx + mn) / 2; d = mx - mn; H = 0; S = 0
+      if (d != 0) {
+        S = L > 0.5 ? d / (2 - mx - mn) : d / (mx + mn)
+        if (mx == r)      H = (g - b) / d + (g < b ? 6 : 0)
+        else if (mx == g) H = (b - r) / d + 2
+        else              H = (r - g) / d + 4
+        H = H / 6
+      }
+    }
+    BEGIN {
+      hsl_of(strtonum("0x" substr(hex,1,2))/255, strtonum("0x" substr(hex,3,2))/255, strtonum("0x" substr(hex,5,2))/255)
+      l = L
+      hsl_of(strtonum("0x" substr(acc,1,2))/255, strtonum("0x" substr(acc,3,2))/255, strtonum("0x" substr(acc,5,2))/255)
+      h = H; s = S < 0.7 ? 0.7 : S
+      q = l < 0.5 ? l * (1 + s) : l + s - l * s
+      p = 2 * l - q
+      printf "%02X%02X%02X", hue2rgb(p,q,h+1/3)*255+0.5, hue2rgb(p,q,h)*255+0.5, hue2rgb(p,q,h-1/3)*255+0.5
+    }'
+}
+
+# A colors.toml with the crank applied — the file omarchy-theme-osc reads, so
+# the crank rides the exact same delivery path as a normal tint. Text keys
+# phosphor-ize toward the accent; every other colour multiplies saturation
+# (near-black backgrounds barely move: low lightness pins them).
+saturate_toml() { # src dst factor accenthex
+  : >"$2"
+  local line key hex
+  while IFS= read -r line; do
+    if [[ $line =~ ^([a-z_]+)([[:space:]]*=[[:space:]]*\")#([0-9A-Fa-f]{6})(\".*)$ ]]; then
+      key="${BASH_REMATCH[1]}"
+      hex="${BASH_REMATCH[3]}"
+      case "$key" in
+        foreground|light_foreground|bright_foreground|cursor)
+          printf '%s%s#%s%s\n' "$key" "${BASH_REMATCH[2]}" "$(phos_hex "$hex" "$4")" "${BASH_REMATCH[4]}" >>"$2" ;;
+        *)
+          printf '%s%s#%s%s\n' "$key" "${BASH_REMATCH[2]}" "$(sat_hex "$hex" "$3")" "${BASH_REMATCH[4]}" >>"$2" ;;
+      esac
+    else
+      printf '%s\n' "$line" >>"$2"
+    fi
+  done <"$1"
+}
+
+# The installed variant set as JSON — shared by --json and --state, so the
+# card contract has exactly one producer.
+emit_variants_json() {
+  local first=1 v c a b
+  printf '['
+  for v in $(variants); do
+    c="$THEMES/$PREFIX$v/colors.toml"
+    a=$(omarchy-theme-color --file "$c" accent)
+    b=$(omarchy-theme-color --file "$c" bright_cyan "$a")
+    [[ $first -eq 1 ]] || printf ','
+    printf '{"key":"%s","glyph":"%s","accent":"%s","partner":"%s"}' \
+      "$v" "$(glyph_of "$v")" "$a" "$b"
+    first=0
+  done
+  printf ']'
+}
+
+# The pick record: line 1 the variant ("-" = none), optional "sat=1" line.
+rec_variant() { [[ -f $1 ]] && head -1 "$1" || true; }
+rec_sat()     { [[ -f $1 ]] && grep -qx "sat=1" "$1" && echo 1 || true; }
+rec_write()   { # path variant sat
+  mkdir -p "$RUNDIR"
+  {
+    printf '%s\n' "$2"
+    if [[ "$3" == 1 ]]; then printf 'sat=1\n'; fi
+  } >"$1"
+}
+
+# The CURRENT theme's border pair, computed from its palette exactly as the
+# theme's own hyprland.lua computes it. Needed because set_prop has NO working
+# "unset" on this build: the magic string is accepted and silently ignored
+# (verified by pixel — a red override survives value="unset" untouched). The
+# only reliable reset is an explicit SET to what the theme would have drawn.
+theme_border_args() {
+  local cur="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme/colors.toml"
+  [[ -f $cur ]] || return 1
+  local a b m
+  a=$(omarchy-theme-color --file "$cur" accent)
+  b=$(omarchy-theme-color --file "$cur" bright_cyan "$a")
+  m=$(omarchy-theme-color --file "$cur" muted "$a")
+  printf '%s\n%s\n' "rgba(${a#\#}ee) rgba(${b#\#}ee) 45deg" "rgba(${m#\#}55)"
+}
+
+# The border is the FOCUS signal: only the active window wears the loud 45°
+# gradient; unfocused keeps the variant's hue as a quiet solid. Setting both
+# states to the same bright value — the old behaviour — made a wall of tinted
+# terminals read identity but never focus.
+set_border() {
+  local addr="$1" active="$2" inactive="$3"
+  [[ -n $addr ]] || return 0
+  hyprctl dispatch \
+    "hl.dsp.window.set_prop({ prop = \"active_border_color\", value = \"$active\", window = \"address:$addr\" })" \
+    >/dev/null 2>&1 || true
+  hyprctl dispatch \
+    "hl.dsp.window.set_prop({ prop = \"inactive_border_color\", value = \"$inactive\", window = \"address:$addr\" })" \
+    >/dev/null 2>&1 || true
+}
+
+# Somebody ELSE'S terminal: --window hands us the Hyprland address, the client
+# list maps it to the emulator's pid, and the shell inside is the first
+# descendant holding a pts. Writing the OSC palette to that pts is the same
+# trick as tinting yourself — the emulator interprets whatever arrives on its
+# tty — just aimed. Two levels of children covers login-shell / wrapper setups.
+window_pid() {
+  hyprctl clients -j 2>/dev/null | jq -r --arg a "$1" '.[] | select(.address==$a) | .pid' | head -1
+}
+
+window_tty() {
+  local pid child grand t
+  pid="$(window_pid "$1")"
+  [[ -n $pid && $pid != null ]] || return 1
+  for child in $(ps --ppid "$pid" -o pid= 2>/dev/null); do
+    t=$(ps -o tty= -p "$child" 2>/dev/null | tr -d ' ')
+    [[ $t == pts/* ]] && { echo "/dev/$t"; return 0; }
+  done
+  for child in $(ps --ppid "$pid" -o pid= 2>/dev/null); do
+    for grand in $(ps --ppid "$child" -o pid= 2>/dev/null); do
+      t=$(ps -o tty= -p "$grand" 2>/dev/null | tr -d ' ')
+      [[ $t == pts/* ]] && { echo "/dev/$t"; return 0; }
+    done
+  done
+  return 1
+}
+
+# Everything below is the command-line surface. Sourcing the file stops here,
+# which is how test/run reaches the pure helpers above without executing us.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0 2>/dev/null || true; fi
+
+# --window ADDR: aim every following action at that Hyprland window instead of
+# the terminal this shell runs in.
+TARGET_ADDR=""
+if [[ "${1:-}" == "--window" ]]; then
+  TARGET_ADDR="${2:?td-tint: --window needs a Hyprland address}"
+  shift 2
+fi
+
+# --border-only: reframe the window without touching what's on the tube — the
+# repair verb for a window whose text tint is right but whose border was lost.
+BORDER_ONLY=""
+if [[ "${1:-}" == "--border-only" ]]; then
+  BORDER_ONLY=1
+  shift
+fi
 
 case "${1:-}" in
 --list)
   for v in $(variants); do printf '  %s  %s\n' "$(glyph_of "$v")" "$v"; done
   exit 0
   ;;
+--sync)
+  # The programmatic sweep: per-window border props survive theme reloads,
+  # so any window painted under an OLD rule keeps reading wrong until
+  # someone reconciles it. This makes reconciliation one idempotent verb:
+  # a recorded pick is re-framed under the CURRENT rule; a window with no
+  # record can only be bright by accident, so its props reset to the theme;
+  # records for windows that no longer exist are swept.
+  command -v hyprctl >/dev/null || die "hyprctl not found"
+  mkdir -p "$RUNDIR"
+  clients="$(hyprctl clients -j)"
+  mapfile -t THEME_TB < <(theme_border_args) || true
+  count=0
+  while IFS= read -r addr; do
+    [[ -n $addr ]] || continue
+    rec="$RUNDIR/$addr"
+    if [[ -f $rec ]]; then
+      v="$(rec_variant "$rec")"
+      base=""
+      if [[ -n $v && $v != "-" && -f "$THEMES/$PREFIX$v/colors.toml" ]]; then
+        base="$THEMES/$PREFIX$v/colors.toml"
+        a=$(omarchy-theme-color --file "$base" accent)
+        b=$(omarchy-theme-color --file "$base" bright_cyan "$a")
+        set_border "$addr" "rgba(${a#\#}ee) rgba(${b#\#}ee) 45deg" "rgba($(dim_hex "$a")cc)"
+      elif [[ $v == "-" ]]; then
+        base="$CURRENT"
+        if [[ ${#THEME_TB[@]} -eq 2 ]]; then set_border "$addr" "${THEME_TB[0]}" "${THEME_TB[1]}"; fi
+      else
+        rm -f "$rec"
+      fi
+      # a recorded SATURATE survives the sweep — re-crank from the base palette
+      if [[ -n $base && -f $base && "$(rec_sat "$rec")" == 1 ]]; then
+        if t=$(window_tty "$addr"); then
+          acc=$(omarchy-theme-color --file "$base" accent)
+          tmp="$(mktemp --suffix=.toml)"
+          saturate_toml "$base" "$tmp" "$SAT_FACTOR" "$acc"
+          omarchy-theme-osc "$tmp" >"$t"
+          rm -f "$tmp"
+        fi
+      fi
+    else
+      # an unrecorded window can only carry junk props by accident — pin it
+      # to exactly what the theme would draw (set_prop "unset" is a no-op),
+      # and RECORD the pin as "-": a pinned border goes stale the moment the
+      # desktop theme changes, so every pinned window must stay reconcilable.
+      # With the theme-set.d hook running --sync on every switch, this line
+      # is what makes the whole box self-healing.
+      if [[ ${#THEME_TB[@]} -eq 2 ]]; then
+        set_border "$addr" "${THEME_TB[0]}" "${THEME_TB[1]}"
+        rec_write "$RUNDIR/$addr" "-" 0
+      fi
+    fi
+    count=$((count + 1))
+  done < <(jq -r --argjson tc "$TERM_CLASSES" '.[] | select(.class as $cl | $tc | index($cl)) | .address' <<<"$clients")
+  alive="$(jq -r '.[].address' <<<"$clients")"
+  for f in "$RUNDIR"/0x*; do
+    [[ -e $f ]] || break
+    grep -qx "$(basename "$f")" <<<"$alive" || rm -f "$f"
+  done
+  echo "synced $count terminal window(s): recorded picks re-framed, fossils reset"
+  exit 0
+  ;;
+--json)
+  emit_variants_json
+  printf '\n'
+  exit 0
+  ;;
+--state)
+  # The oracle. Everything an agent, the MCP server or the overlay needs to
+  # render or mutate the box, in one tested document: no consumer re-derives
+  # window filtering, record parsing or monitor offsets ever again.
+  command -v hyprctl >/dev/null || die "--state needs a Hyprland session"
+  clients="$(hyprctl clients -j)"
+  aws="$(hyprctl activeworkspace -j | jq '.id')"
+  mons="$(hyprctl monitors -j)"
+  awin="$(hyprctl activewindow -j 2>/dev/null || echo '{}')"
+  recs='{}'
+  if [[ -d $RUNDIR ]]; then
+    recs=$(for f in "$RUNDIR"/0x*; do
+      [[ -f $f ]] || continue
+      printf '%s\t%s\t%s\n' "$(basename "$f")" "$(rec_variant "$f")" "$(rec_sat "$f")"
+    done | jq -R -s '
+      split("\n") | map(select(length > 0) | split("\t")
+        | {(.[0]): {v: .[1], s: (.[2] == "1")}}) | add // {}')
+  fi
+  variants_json="$(emit_variants_json)"
+  jq -n --argjson c "$clients" --argjson aw "$aws" --argjson m "$mons" \
+        --argjson r "$recs" --argjson v "$variants_json" --argjson tc "$TERM_CLASSES" \
+        --argjson fw "$awin" '
+    (($m | map(select(.focused)) | first) // ($m | first)) as $mon |
+    {
+      variants: $v,
+      active_workspace: $aw,
+      focused: ($fw.address // null),
+      monitor: {name: $mon.name, x: $mon.x, y: $mon.y},
+      tiles: [ $c[]
+        | select((.class as $cl | $tc | index($cl)) or .class == "terminal-delight")
+        | {address, class, pid,
+           workspace: .workspace.id,
+           on_active_workspace: (.workspace.id == $aw),
+           terminal_delight: (.class == "terminal-delight"),
+           paintable: (.class != "terminal-delight"),
+           at, size,
+           variant: ((($r[.address] // {}).v // "-") | if . == "-" then null else . end),
+           saturated: (($r[.address] // {}).s // false)}
+      ]
+    }'
+  exit 0
+  ;;
+--saturate)
+  mode="${2:-toggle}"
+  case "$mode" in on|off|toggle) ;; *) die "--saturate takes on|off|toggle" ;; esac
+  if [[ -n $TARGET_ADDR ]]; then
+    tty=$(window_tty "$TARGET_ADDR") || die "no shell tty behind window $TARGET_ADDR"
+    addr="$TARGET_ADDR"
+  else
+    tty=$(this_tty) || true
+    [[ -n ${tty:-} ]] || die "not attached to a terminal."
+    addr=$(this_window) || true
+  fi
+  # No window address (rare: not under Hyprland) → no record. An empty rec
+  # path makes every rec_* helper a clean no-op; the old '.../none' fallback
+  # was a single file SHARED by every address-less terminal — state bleed.
+  rec="${addr:+$RUNDIR/$addr}"
+  v="$(rec_variant "$rec")"
+  cur="$(rec_sat "$rec")"
+  new=1
+  [[ "$mode" == off ]] && new=0
+  [[ "$mode" == toggle && "$cur" == 1 ]] && new=0
+  base="$CURRENT"
+  [[ -n $v && $v != "-" && -f "$THEMES/$PREFIX$v/colors.toml" ]] && base="$THEMES/$PREFIX$v/colors.toml"
+  [[ -f $base ]] || die "no palette source to saturate"
+  if [[ $new == 1 ]]; then
+    acc=$(omarchy-theme-color --file "$base" accent)
+    tmp="$(mktemp --suffix=.toml)"
+    saturate_toml "$base" "$tmp" "$SAT_FACTOR" "$acc"
+    omarchy-theme-osc "$tmp" >"$tty"
+    rm -f "$tmp"
+    echo "🫗  saturation cranked"
+  else
+    omarchy-theme-osc "$base" >"$tty"
+    echo "saturation back to base"
+  fi
+  if [[ -n ${addr:-} ]]; then rec_write "$rec" "${v:--}" "$new"; fi
+  exit 0
+  ;;
 --clear)
-  tty=$(this_tty) || true
+  if [[ -n $TARGET_ADDR ]]; then
+    tty=$(window_tty "$TARGET_ADDR") || die "no shell tty behind window $TARGET_ADDR"
+    addr="$TARGET_ADDR"
+  else
+    tty=$(this_tty) || true
+    addr=$(this_window) || true
+  fi
   [[ -n ${tty:-} && -f $CURRENT ]] && omarchy-theme-osc "$CURRENT" >"$tty"
-  addr=$(this_window) || true
   if [[ -n ${addr:-} ]]; then
-    for prop in active_border_color inactive_border_color; do
-      hyprctl dispatch \
-        "hl.dsp.window.set_prop({ prop = \"$prop\", value = \"unset\", window = \"address:$addr\" })" \
-        >/dev/null 2>&1 || true
-    done
+    if mapfile -t tb < <(theme_border_args) && [[ ${#tb[@]} -eq 2 ]]; then
+      set_border "$addr" "${tb[0]}" "${tb[1]}"
+    fi
+    rm -f "$RUNDIR/$addr"
   fi
   echo "cleared — this terminal follows the desktop theme again."
   exit 0
@@ -110,6 +486,8 @@ esac
 variant="${1:-}"
 
 if [[ -z $variant ]]; then
+  # Window mode is scriptable, not interactive — the picker is the overlay.
+  [[ -z $TARGET_ADDR ]] || die "--window needs an explicit variant (or --clear)"
   command -v gum >/dev/null || die "give a variant, or install gum for the picker. td-tint --list"
   variant=$(for v in $(variants); do printf '%s %s\n' "$(glyph_of "$v")" "$v"; done |
     gum filter --placeholder="which terminal is this?" --height=12) || exit 0
@@ -121,15 +499,41 @@ theme="$THEMES/$PREFIX$variant"
 colors="$theme/colors.toml"
 [[ -f $colors ]] || die "$colors is missing — re-run ./install-variants.sh"
 
-# 1. the text: this terminal's own palette, straight down its own tty
-tty=$(this_tty) || true
-[[ -n ${tty:-} ]] || die "not attached to a terminal."
-omarchy-theme-osc "$colors" >"$tty"
+# The window first: its record decides whether the fresh coat goes on
+# already-cranked. SATURATE is a property of the TILE, not of the pick —
+# repainting changes the hue, not the crank.
+if [[ -n $TARGET_ADDR ]]; then addr="$TARGET_ADDR"; else addr=$(this_window) || true; fi
+prior_sat="$(rec_sat "${addr:+$RUNDIR/$addr}")"
+
+# 1. the text: the target terminal's own palette, straight down its tty
+# (skipped under --border-only — the tube already shows the right colours)
+if [[ -z $BORDER_ONLY ]]; then
+  if [[ -n $TARGET_ADDR ]]; then
+    tty=$(window_tty "$TARGET_ADDR") || die "no shell tty behind window $TARGET_ADDR"
+  else
+    tty=$(this_tty) || true
+    [[ -n ${tty:-} ]] || die "not attached to a terminal."
+  fi
+  if [[ "$prior_sat" == 1 ]]; then
+    acc=$(omarchy-theme-color --file "$colors" accent)
+    tmp="$(mktemp --suffix=.toml)"
+    saturate_toml "$colors" "$tmp" "$SAT_FACTOR" "$acc"
+    omarchy-theme-osc "$tmp" >"$tty"
+    rm -f "$tmp"
+  else
+    omarchy-theme-osc "$colors" >"$tty"
+  fi
+fi
 
 # 2. the frame: this window's own border, so it reads while unfocused too
 accent=$(omarchy-theme-color --file "$colors" accent)
 partner=$(omarchy-theme-color --file "$colors" bright_cyan "$accent")
-addr=$(this_window) || true
-set_border "${addr:-}" "rgba(${accent#\#}ee) rgba(${partner#\#}ee) 45deg"
+set_border "${addr:-}" "rgba(${accent#\#}ee) rgba(${partner#\#}ee) 45deg" "rgba($(dim_hex "$accent")cc)"
+
+# remember the pick, so a later repair restores instead of guessing —
+# carrying SATURATE across it. `--saturate off` is the way to pour it back.
+if [[ -n ${addr:-} ]]; then
+  rec_write "$RUNDIR/$addr" "$variant" "${prior_sat:-0}"
+fi
 
 printf '%s  this terminal is %s\n' "$(glyph_of "$variant")" "$variant"

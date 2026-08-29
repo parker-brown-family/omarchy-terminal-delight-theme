@@ -1,0 +1,12 @@
+#!/bin/bash
+# Installed by omarchy-terminal-delight-theme's install-variants.sh.
+#
+# Omarchy calls every executable here after a theme switch, passing the new
+# theme's snake-cased name as $1 (unused — the reconciler reads the freshly
+# staged palette itself). The point: per-window border props survive theme
+# switches (Hyprland's set_prop has no working unset), so without this hook
+# every painted or pinned terminal wears the PREVIOUS theme's colours until
+# someone notices. One --sync makes the switch total: recorded picks keep
+# their variant identity, everything else adopts the new theme's border pair.
+command -v td-tint >/dev/null 2>&1 && td-tint --sync >/dev/null 2>&1
+exit 0
