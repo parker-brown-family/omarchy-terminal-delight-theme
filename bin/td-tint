@@ -99,6 +99,21 @@ dim_hex() {
   printf '%02X%02X%02X' "$r" "$g" "$b"
 }
 
+# The CURRENT theme's border pair, computed from its palette exactly as the
+# theme's own hyprland.lua computes it. Needed because set_prop has NO working
+# "unset" on this build: the magic string is accepted and silently ignored
+# (verified by pixel — a red override survives value="unset" untouched). The
+# only reliable reset is an explicit SET to what the theme would have drawn.
+theme_border_args() {
+  local cur="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme/colors.toml"
+  [[ -f $cur ]] || return 1
+  local a b m
+  a=$(omarchy-theme-color --file "$cur" accent)
+  b=$(omarchy-theme-color --file "$cur" bright_cyan "$a")
+  m=$(omarchy-theme-color --file "$cur" muted "$a")
+  printf '%s\n%s\n' "rgba(${a#\#}ee) rgba(${b#\#}ee) 45deg" "rgba(${m#\#}55)"
+}
+
 # The border is the FOCUS signal: only the active window wears the loud 45°
 # gradient; unfocused keeps the variant's hue as a quiet solid. Setting both
 # states to the same bright value — the old behaviour — made a wall of tinted
@@ -171,6 +186,7 @@ case "${1:-}" in
   command -v hyprctl >/dev/null || die "hyprctl not found"
   mkdir -p "$RUNDIR"
   clients="$(hyprctl clients -j)"
+  mapfile -t THEME_TB < <(theme_border_args) || true
   count=0
   while IFS= read -r addr; do
     [[ -n $addr ]] || continue
@@ -186,11 +202,9 @@ case "${1:-}" in
         rm -f "$rec"
       fi
     else
-      for prop in active_border_color inactive_border_color; do
-        hyprctl dispatch \
-          "hl.dsp.window.set_prop({ prop = \"$prop\", value = \"unset\", window = \"address:$addr\" })" \
-          >/dev/null 2>&1 || true
-      done
+      # an unrecorded window can only carry junk props by accident — pin it
+      # to exactly what the theme would draw (set_prop "unset" is a no-op)
+      [[ ${#THEME_TB[@]} -eq 2 ]] && set_border "$addr" "${THEME_TB[0]}" "${THEME_TB[1]}"
     fi
     count=$((count + 1))
   done < <(jq -r '.[] | select(.class=="foot" or .class=="Alacritty" or .class=="kitty" or .class=="com.mitchellh.ghostty" or .class=="org.wezfurlong.wezterm") | .address' <<<"$clients")
@@ -229,11 +243,9 @@ case "${1:-}" in
   fi
   [[ -n ${tty:-} && -f $CURRENT ]] && omarchy-theme-osc "$CURRENT" >"$tty"
   if [[ -n ${addr:-} ]]; then
-    for prop in active_border_color inactive_border_color; do
-      hyprctl dispatch \
-        "hl.dsp.window.set_prop({ prop = \"$prop\", value = \"unset\", window = \"address:$addr\" })" \
-        >/dev/null 2>&1 || true
-    done
+    if mapfile -t tb < <(theme_border_args) && [[ ${#tb[@]} -eq 2 ]]; then
+      set_border "$addr" "${tb[0]}" "${tb[1]}"
+    fi
     rm -f "$RUNDIR/$addr"
   fi
   echo "cleared — this terminal follows the desktop theme again."
