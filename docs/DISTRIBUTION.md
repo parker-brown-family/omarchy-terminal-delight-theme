@@ -39,21 +39,34 @@ plugin, one repo, `manifest.json` at root). Submission mechanics
 4. The marketplace validates listings, **not security** — our README's full
    footprint disclosure (runs/reads/writes/network) is the answer to that.
 
-**Gate:** the lab's incubation-week doctrine (daily use since 2026-08-28).
-Submission target: **on or after 2026-09-04**, via `lab/bin/graduate
-td-palette` → repo `parker-brown-family/omarchy-td-palette` → submission
-issue. Marketplace plugins are automatically eligible for future
+**Shipped 2026-08-29** — the incubation-week gate was cut short on the
+owner's call (issue #8: match the marketplace protocol now, not next week).
+Live at <https://github.com/parker-brown-family/omarchy-td-palette> (v0.1.0,
+tagged + released, graduated with history via `lab/bin/graduate`), installed
+on the reference box through the real `omarchy plugin add` path, and
+submitted as [marketplace #3330](https://github.com/HANCORE-linux/omarchy-plugin-marketplace/issues/3330).
+Two facts the live submission form corrected against this plan: there is
+no **Terminal** category (filed under **Appearance**, tags Bar / Hyprland /
+Quickshell, with "Terminal" suggested as a new reusable tag), and the
+checklist requires removal instructions in the README — it carries them
+now. Marketplace plugins are automatically eligible for future
 competitions — being listed IS the entry ticket.
 
-## Ready-to-submit checklist (graduation day)
+## Ready-to-submit checklist (graduation day: 2026-08-29)
 
-- [ ] `bin/graduate td-palette` (own repo, tag, preview)
-- [ ] `omarchy plugin validate` clean on the graduated repo
-- [ ] README discloses footprint; LICENSE present; preview.png is the real bar
-- [ ] `omarchy plugin add <url> --enable` works from scratch in one command
-- [ ] Submission issue with category (Terminal) + tags (theme, terminal,
-      terminal-delight, paint)
-- [ ] Requirements section names `td-tint` (this repo) as the engine
+- [x] `bin/graduate td-palette` (own repo, tag, preview)
+- [x] `omarchy plugin validate` clean on the graduated repo (exit 0)
+- [x] README discloses footprint; LICENSE present; preview.png is a real-bar
+      crop — a fuller overlay shot is
+      [omarchy-td-palette#1](https://github.com/parker-brown-family/omarchy-td-palette/issues/1)
+      (screen locked + screencopy wedged on graduation day)
+- [x] `omarchy plugin add <url> --enable` works from scratch in one command
+      (proven by replacing the dev-link on the reference box; `plugin
+      update` proven too)
+- [x] Submission issue — category **Appearance** (no Terminal category
+      exists on the live form), tags Bar / Hyprland / Quickshell,
+      "Terminal" suggested as a new tag
+- [x] Requirements section names `td-tint` (this repo) as the engine
 
 ## Sources
 
