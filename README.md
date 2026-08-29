@@ -17,6 +17,16 @@ and the SATURATE crank makes the text glow like the terminal that inspired it:
 
 ![five painted tiles — retro, tide, army, wood, and a saturated nuclear](docs/gallery/painted-wall.png)
 
+That picker is a separate, optional install —
+[**Terminal Paint**](https://github.com/parker-brown-family/omarchy-td-palette),
+a bar widget on the Omarchy plugin marketplace. This repo is what it paints
+*with*: the variant set, and the `td-tint` engine underneath it. Everything
+below works from the command line without it.
+
+```bash
+omarchy plugin add https://github.com/parker-brown-family/omarchy-td-palette.git --enable
+```
+
 ## Install
 
 ```
@@ -255,6 +265,20 @@ rather than in any theme:
 ```bash
 ./install-curve.sh    # once, then log out and back in
 ```
+
+## The three repos
+
+| Repo | What it is |
+|---|---|
+| [**terminal-delight**](https://github.com/parker-brown-family/terminal-delight) | the terminal itself — GPU-native, Rust, tiling panes, per-pane grading |
+| [**omarchy-terminal-delight-theme**](https://github.com/parker-brown-family/omarchy-terminal-delight-theme) | the desktop half — the Omarchy theme, the variant set, the compositor curve, and `td-tint` |
+| [**omarchy-td-palette**](https://github.com/parker-brown-family/omarchy-td-palette) | *Terminal Paint* — the 🎨 bar widget that raises the picker over every terminal tile on the workspace |
+
+This one is the middle layer, and the only one the other two both depend on:
+`install-variants.sh` is what puts `td-tint` on `PATH`, and `td-tint --state`
+is the oracle the palette widget renders. A variant key written in
+`variants.toml` becomes a card in that widget — which is why the widget
+validates every key it reads rather than trusting this repo to be careful.
 
 ## Files
 
