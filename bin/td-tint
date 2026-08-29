@@ -5,6 +5,9 @@
 #   td-tint cherry       this terminal is now the cherry one
 #   td-tint --clear      back to whatever the desktop theme says
 #   td-tint --list       what is installed
+#   td-tint --json       the same list as JSON (key/glyph/accent/partner)
+#   td-tint --window 0x… cherry     aim at another terminal's window
+#   td-tint --window 0x… --clear    …or clear it
 #
 # An Omarchy theme is global by design: switching it repaints every terminal
 # at once, which is the opposite of being able to tell them apart. So this
@@ -86,15 +89,71 @@ set_border() {
   done
 }
 
+# Somebody ELSE'S terminal: --window hands us the Hyprland address, the client
+# list maps it to the emulator's pid, and the shell inside is the first
+# descendant holding a pts. Writing the OSC palette to that pts is the same
+# trick as tinting yourself — the emulator interprets whatever arrives on its
+# tty — just aimed. Two levels of children covers login-shell / wrapper setups.
+window_pid() {
+  hyprctl clients -j 2>/dev/null | jq -r --arg a "$1" '.[] | select(.address==$a) | .pid' | head -1
+}
+
+window_tty() {
+  local pid child grand t
+  pid="$(window_pid "$1")"
+  [[ -n $pid && $pid != null ]] || return 1
+  for child in $(ps --ppid "$pid" -o pid= 2>/dev/null); do
+    t=$(ps -o tty= -p "$child" 2>/dev/null | tr -d ' ')
+    [[ $t == pts/* ]] && { echo "/dev/$t"; return 0; }
+  done
+  for child in $(ps --ppid "$pid" -o pid= 2>/dev/null); do
+    for grand in $(ps --ppid "$child" -o pid= 2>/dev/null); do
+      t=$(ps -o tty= -p "$grand" 2>/dev/null | tr -d ' ')
+      [[ $t == pts/* ]] && { echo "/dev/$t"; return 0; }
+    done
+  done
+  return 1
+}
+
+# --window ADDR: aim every following action at that Hyprland window instead of
+# the terminal this shell runs in.
+TARGET_ADDR=""
+if [[ "${1:-}" == "--window" ]]; then
+  TARGET_ADDR="${2:?td-tint: --window needs a Hyprland address}"
+  shift 2
+fi
+
 case "${1:-}" in
 --list)
   for v in $(variants); do printf '  %s  %s\n' "$(glyph_of "$v")" "$v"; done
   exit 0
   ;;
+--json)
+  # The overlay's contract: every installed variant with the two colours a
+  # card needs. Plain ordered JSON, no jq required to produce or consume.
+  printf '['
+  first=1
+  for v in $(variants); do
+    c="$THEMES/$PREFIX$v/colors.toml"
+    a=$(omarchy-theme-color --file "$c" accent)
+    b=$(omarchy-theme-color --file "$c" bright_cyan "$a")
+    [[ $first -eq 1 ]] || printf ','
+    printf '{"key":"%s","glyph":"%s","accent":"%s","partner":"%s"}' \
+      "$v" "$(glyph_of "$v")" "$a" "$b"
+    first=0
+  done
+  printf ']\n'
+  exit 0
+  ;;
 --clear)
-  tty=$(this_tty) || true
+  if [[ -n $TARGET_ADDR ]]; then
+    tty=$(window_tty "$TARGET_ADDR") || die "no shell tty behind window $TARGET_ADDR"
+    addr="$TARGET_ADDR"
+  else
+    tty=$(this_tty) || true
+    addr=$(this_window) || true
+  fi
   [[ -n ${tty:-} && -f $CURRENT ]] && omarchy-theme-osc "$CURRENT" >"$tty"
-  addr=$(this_window) || true
   if [[ -n ${addr:-} ]]; then
     for prop in active_border_color inactive_border_color; do
       hyprctl dispatch \
@@ -110,6 +169,8 @@ esac
 variant="${1:-}"
 
 if [[ -z $variant ]]; then
+  # Window mode is scriptable, not interactive — the picker is the overlay.
+  [[ -z $TARGET_ADDR ]] || die "--window needs an explicit variant (or --clear)"
   command -v gum >/dev/null || die "give a variant, or install gum for the picker. td-tint --list"
   variant=$(for v in $(variants); do printf '%s %s\n' "$(glyph_of "$v")" "$v"; done |
     gum filter --placeholder="which terminal is this?" --height=12) || exit 0
@@ -121,15 +182,19 @@ theme="$THEMES/$PREFIX$variant"
 colors="$theme/colors.toml"
 [[ -f $colors ]] || die "$colors is missing — re-run ./install-variants.sh"
 
-# 1. the text: this terminal's own palette, straight down its own tty
-tty=$(this_tty) || true
-[[ -n ${tty:-} ]] || die "not attached to a terminal."
+# 1. the text: the target terminal's own palette, straight down its tty
+if [[ -n $TARGET_ADDR ]]; then
+  tty=$(window_tty "$TARGET_ADDR") || die "no shell tty behind window $TARGET_ADDR"
+else
+  tty=$(this_tty) || true
+  [[ -n ${tty:-} ]] || die "not attached to a terminal."
+fi
 omarchy-theme-osc "$colors" >"$tty"
 
 # 2. the frame: this window's own border, so it reads while unfocused too
 accent=$(omarchy-theme-color --file "$colors" accent)
 partner=$(omarchy-theme-color --file "$colors" bright_cyan "$accent")
-addr=$(this_window) || true
+if [[ -n $TARGET_ADDR ]]; then addr="$TARGET_ADDR"; else addr=$(this_window) || true; fi
 set_border "${addr:-}" "rgba(${accent#\#}ee) rgba(${partner#\#}ee) 45deg"
 
 printf '%s  this terminal is %s\n' "$(glyph_of "$variant")" "$variant"
