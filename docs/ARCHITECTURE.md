@@ -104,6 +104,12 @@ focus all live — and are tested — in exactly one place.
   live. Plan verification accordingly.
 - **Ubuntu ships ImageMagick 6** (`convert`), Arch ships 7 (`magick`) —
   `build-variants` resolves `MAGICK` once; keep invocations classic-CLI.
+- **OSC palette theming cannot touch truecolor cells.** Verified 2026-08-29
+  on a live tmux tile (`*:RGB` passthrough, `COLORTERM=truecolor` app): the
+  indexed status line took the saturate crank, the 24-bit prose did not —
+  same tile, same OSC push. Not a delivery bug; palette redefinition has no
+  jurisdiction over per-cell RGB. Don't chase it with more OSC (see #7); the
+  every-pixel path is renderer-level grading (Terminal Delight adoption).
 
 ## Testing doctrine
 

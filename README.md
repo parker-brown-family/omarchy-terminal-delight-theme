@@ -222,6 +222,19 @@ Terminal Delight itself is not the target here — it renders its own palette
 and has a per-pane colour tray for the same job. `td-tint` is for foot,
 Alacritty, Ghostty, kitty: anything that honours OSC 4/10/11.
 
+**What the crank can reach.** Paint and SATURATE work by redefining the
+terminal's palette, so they recolour every cell that is *drawn from* the
+palette: shell prompts, `ls`, compiler output, tmux status lines — the
+16-colour world most terminal life lives in. A TUI that paints in 24-bit
+RGB (anything seeing `COLORTERM=truecolor` — Claude Code, modern editors,
+tmux configured with `*:RGB` passthrough) carries its colours per-cell and
+never consults the palette, so those pixels keep their app-chosen colour by
+design. You can watch the boundary in a single tile: saturate a tmux pane
+running a truecolor agent and the status bar takes the crank while the
+agent's prose does not. For per-pane grading that reaches *every* pixel,
+that is what adopting the pane into Terminal Delight is for — TD grades at
+the renderer, below the colour encoding.
+
 ### Why the variants are built, not shipped
 
 `omarchy-theme-set` only strips Lua from a theme carrying its own `.git`
