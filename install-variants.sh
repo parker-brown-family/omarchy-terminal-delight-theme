@@ -51,6 +51,11 @@ echo "installed $bindir/td-tint"
 ln -sfn "$here/bin/td-monitor" "$bindir/td-monitor"
 echo "installed $bindir/td-monitor"
 
+# td-mcp exposes the whole paint surface to agents as MCP tools; register it
+# with e.g.  claude mcp add td-paint -- "$bindir/td-mcp"
+ln -sfn "$here/bin/td-mcp" "$bindir/td-mcp"
+echo "installed $bindir/td-mcp"
+
 "$here/bin/build-variants" "$@"
 
 cat <<'TIP'

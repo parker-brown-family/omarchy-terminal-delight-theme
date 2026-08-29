@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# The gate. Dependency-free: bash + jq + python3 (for the MCP session), all of
+# which the tools themselves already require. Hermetic: XDG_* point into a
+# throwaway tree, every external command (hyprctl, omarchy-theme-*, glslang,
+# terminal-delight) is a logging stub on PATH, and assertions read files and
+# logs — never the live compositor.
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(dirname "$here")"
+
+T="$(mktemp -d)"
+trap 'rm -rf "$T"' EXIT
+
+export XDG_CONFIG_HOME="$T/config"
+export XDG_STATE_HOME="$T/state"
+export XDG_RUNTIME_DIR="$T/run"
+export TD_TEST_LOG="$T/log"
+export TD_TEST_FIXTURES="$here/fixtures"
+export PATH="$here/stubs:$root/bin:$PATH"
+
+mkdir -p "$T/log" "$T/run" \
+  "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-cherry" \
+  "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-bat" \
+  "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight" \
+  "$XDG_STATE_HOME/omarchy/current/theme"
+
+cp "$here/fixtures/variant-cherry.toml" "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-cherry/colors.toml"
+printf '🍒\n' > "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-cherry/glyph"
+cp "$here/fixtures/variant-cherry.toml" "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-bat/colors.toml"
+printf '🦇\n' > "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-bat/glyph"
+cp "$here/fixtures/theme-colors.toml" "$XDG_STATE_HOME/omarchy/current/theme/colors.toml"
+cp "$here/fixtures/monitor.frag" "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight/crt-glass.frag"
+cp "$here/fixtures/monitor.frag" "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-cherry/crt-glass.frag"
+cp "$here/fixtures/monitor.frag" "$XDG_STATE_HOME/omarchy/current/theme/crt-glass.frag"
+
+pass=0
+fail=0
+ok() { pass=$((pass + 1)); printf '  \033[32m✓\033[0m %s\n' "$1"; }
+no() { fail=$((fail + 1)); printf '  \033[31m✗\033[0m %s\n' "$1"; }
+assert_eq() { if [[ "$2" == "$3" ]]; then ok "$1"; else no "$1"; printf '      want %q\n      got  %q\n' "$3" "$2"; fi; }
+assert_has() { if grep -qF -- "$3" <<<"$2"; then ok "$1"; else no "$1"; printf '      missing %q in:\n%s\n' "$3" "$2"; fi; }
+assert_lacks() { if grep -qF -- "$3" <<<"$2"; then no "$1"; printf '      unexpected %q\n' "$3"; else ok "$1"; fi; }
+hexch() { printf '%d' "0x${1:$2:2}"; }
+
+echo "— colour math (sourced from bin/td-tint)"
+# shellcheck source=/dev/null
+source "$root/bin/td-tint"
+# sourcing imported td-tint's `set -e`; a test runner must survive failing
+# assertions, so switch it back off (pipefail/-u stay from our own set line)
+set +e
+
+assert_eq "dim_hex scales channels to 35%" "$(dim_hex F43C7A)" "55152A" 2>/dev/null || true
+out="$(sat_hex 806060 2.0)"
+assert_eq "sat_hex output is 6 hex chars" "${#out}" "6"
+[[ "$out" != "806060" ]] && ok "sat_hex changes an unsaturated colour" || no "sat_hex changes an unsaturated colour"
+r="$(hexch "$out" 0)"; g="$(hexch "$out" 2)"
+[[ "$r" -gt "$g" ]] && ok "sat_hex keeps the red dominance" || no "sat_hex keeps the red dominance"
+assert_eq "sat_hex is identity at full saturation" "$(sat_hex FF0000 1.6)" "FF0000"
+
+out="$(phos_hex C0C0C0 22C55E)"
+r="$(hexch "$out" 0)"; g="$(hexch "$out" 2)"; b="$(hexch "$out" 4)"
+[[ "$g" -gt "$r" && "$g" -gt "$b" ]] && ok "phos_hex adopts the accent hue (green dominates)" || no "phos_hex adopts the accent hue"
+avg=$(( (r + g + b) / 3 ))
+[[ "$avg" -ge 120 && "$avg" -le 235 ]] && ok "phos_hex keeps the original lightness ballpark" || no "phos_hex keeps lightness (avg=$avg)"
+
+echo "— saturate_toml"
+saturate_toml "$here/fixtures/variant-cherry.toml" "$T/sat.toml" 1.6 "#F43C7A"
+fg_line="$(grep '^foreground' "$T/sat.toml")"
+assert_lacks "foreground was rewritten" "$fg_line" "C7A9B4"
+fg_hex="$(sed -E 's/.*"#([0-9A-F]{6})".*/\1/' <<<"$fg_line")"
+r="$(hexch "$fg_hex" 0)"; g="$(hexch "$fg_hex" 2)"
+[[ "$r" -gt "$g" ]] && ok "foreground phosphor-ized toward cherry (red dominates)" || no "foreground phosphor-ized toward cherry"
+assert_eq "background self-consistent with sat_hex" "$(grep '^background' "$T/sat.toml" | sed -E 's/.*"#([0-9A-F]{6})".*/\1/')" "$(sat_hex 0A0407 1.6)"
+assert_eq "comment lines survive byte-identical" "$(head -1 "$T/sat.toml")" "# fixture: an installed variant palette"
+
+echo "— pick records"
+rec="$T/run/td-tint-recdir-test"
+rec_write "$rec" cherry 1
+assert_eq "rec_variant round-trips" "$(rec_variant "$rec")" "cherry"
+assert_eq "rec_sat reads sat=1" "$(rec_sat "$rec")" "1"
+rec_write "$rec" "-" 0
+assert_eq "no-variant records as dash" "$(rec_variant "$rec")" "-"
+assert_eq "sat=0 writes no sat line" "$(rec_sat "$rec")" ""
+
+echo "— td-tint --json"
+json="$(bash "$root/bin/td-tint" --json)"
+assert_eq "json lists both installed variants" "$(jq 'length' <<<"$json")" "2"
+assert_eq "json carries the glyph" "$(jq -r '.[] | select(.key=="cherry") | .glyph' <<<"$json")" "🍒"
+assert_eq "json carries accent" "$(jq -r '.[] | select(.key=="cherry") | .accent' <<<"$json")" "#F43C7A"
+assert_has "json carries the partner colour" "$json" '"partner"'
+
+echo "— td-tint --sync"
+mkdir -p "$XDG_RUNTIME_DIR/td-tint"
+printf 'cherry\n' > "$XDG_RUNTIME_DIR/td-tint/0xaaa"
+printf 'ghost\n' > "$XDG_RUNTIME_DIR/td-tint/0xdead"
+: > "$TD_TEST_LOG/hyprctl.log"
+sync_out="$(bash "$root/bin/td-tint" --sync)"
+assert_has "sync reports two terminal windows" "$sync_out" "synced 2"
+hlog="$(cat "$TD_TEST_LOG/hyprctl.log")"
+assert_has "recorded window re-framed with its variant accent" "$hlog" 'active_border_color", value = "rgba(F43C7Aee)'
+assert_has "recorded window's dim inactive set" "$hlog" '0xaaa'
+assert_has "unrecorded window pinned to the theme accent" "$hlog" 'rgba(22C55Eee)'
+assert_lacks "non-terminal (chrome) untouched" "$hlog" "0xccc"
+assert_lacks "terminal-delight windows untouched" "$hlog" "0xddd"
+[[ ! -f "$XDG_RUNTIME_DIR/td-tint/0xdead" ]] && ok "dead record swept" || no "dead record swept"
+
+echo "— td-monitor"
+listing="$(bash "$root/bin/td-monitor" list)"
+assert_has "list shows ANIMATED" "$listing" "ANIMATED = 0"
+assert_has "list shows a float knob" "$listing" "SCAN = 0.22"
+bash "$root/bin/td-monitor" set SCAN 0.5 >/dev/null
+assert_has "set rewrites the staged copy" "$(grep '^const float SCAN' "$XDG_STATE_HOME/omarchy/current/theme/crt-glass.frag")" "0.5;"
+assert_has "set rewrites the whole family" "$(grep '^const float SCAN' "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-cherry/crt-glass.frag")" "0.5;"
+[[ -s "$TD_TEST_LOG/glslang.log" ]] && ok "edits validated before applying" || no "edits validated before applying"
+bash "$root/bin/td-monitor" set TRACKING 0.7 >/dev/null
+assert_has "a motion knob auto-raises ANIMATED" "$(grep '^#define ANIMATED' "$XDG_STATE_HOME/omarchy/current/theme/crt-glass.frag")" "ANIMATED 1"
+bash "$root/bin/td-monitor" set TRACKING 0 FLICKER 0 JIGGLE 0 >/dev/null
+assert_has "all motion at zero auto-drops ANIMATED" "$(grep '^#define ANIMATED' "$XDG_STATE_HOME/omarchy/current/theme/crt-glass.frag")" "ANIMATED 0"
+if bash "$root/bin/td-monitor" set NOPE 1 >/dev/null 2>&1; then no "unknown knob refused"; else ok "unknown knob refused"; fi
+if bash "$root/bin/td-monitor" set SCAN abc >/dev/null 2>&1; then no "non-number refused"; else ok "non-number refused"; fi
+
+echo "— td-mcp (scripted stdio session)"
+mcp_out="$(printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_variants","arguments":{}}}' \
+  '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"border_only","arguments":{"address":"0xaaa","variant":"cherry"}}}' \
+  '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"monitor_set","arguments":{"knob":"GLARE","value":0.3}}}' \
+  '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"nope","arguments":{}}}' \
+  | python3 "$root/bin/td-mcp")"
+line() { sed -n "${1}p" <<<"$mcp_out"; }
+assert_eq "initialize answers the protocol version" "$(line 1 | jq -r .result.protocolVersion)" "2024-11-05"
+assert_eq "server names itself" "$(line 1 | jq -r .result.serverInfo.name)" "td-paint"
+assert_eq "tools/list advertises the full surface" "$(line 2 | jq '.result.tools | length')" "10"
+assert_has "tools/list includes paint" "$(line 2 | jq -r '.result.tools[].name' | tr '\n' ' ')" "paint"
+assert_eq "list_variants returns parseable variants" "$(line 3 | jq -r '.result.content[0].text' | jq 'length')" "2"
+assert_has "border_only paints through the CLI" "$(line 4 | jq -r '.result.content[0].text')" "cherry"
+assert_eq "border_only records the pick" "$(cat "$XDG_RUNTIME_DIR/td-tint/0xaaa")" "cherry"
+assert_has "monitor_set turns the knob" "$(line 5 | jq -r '.result.content[0].text')" "GLARE=0.3"
+assert_eq "unknown tool is a JSON-RPC error" "$(line 6 | jq -r '.error.code')" "-32602"
+
+echo
+if [[ "$fail" -eq 0 ]]; then
+  printf '\033[32mall %d green\033[0m\n' "$pass"
+  exit 0
+else
+  printf '\033[31m%d failing (of %d)\033[0m\n' "$fail" "$((pass + fail))"
+  exit 1
+fi

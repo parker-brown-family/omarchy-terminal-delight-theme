@@ -47,7 +47,9 @@ const float TRACK_PERIOD = 16.0;// seconds between sweeps      (TD tracking_peri
 const float TRACK_SWEEP  = 7.0; // seconds one sweep takes     (TD tracking_sweep)
 const float BAND_H     = 160.0; // band height in px           (crt.rs BAND_H)
 const float FLICKER    = 0.35;  // stepped burst depth         (TD flicker)
-const float GLARE      = 0.42;  // glare hotspot + streak      (TD screen_glare)
+const float GLARE      = 0.00;  // WHOLE-SCREEN glare — off by default now that the
+                                //   per-window warp shaders draw glare per tile
+                                //   (TD screen_glare; raise for one big sheet of glass)
 const float JIGGLE     = 0.00;  // rare 1–2px vertical hop     (TD jiggle; earn it before desktop-wide)
 const float BRIGHTNESS = 0.00;  // -1..1                       (TD grade brightness)
 const float CONTRAST   = 0.00;  // -1..1                       (TD grade contrast)

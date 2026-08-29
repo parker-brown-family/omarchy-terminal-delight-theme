@@ -1,0 +1,10 @@
+# fixture: the desktop theme's staged palette
+mode = "dark"
+accent             = "#22C55E"
+muted              = "#14401F"
+background         = "#03100A"
+foreground         = "#C0C0C0"
+light_foreground   = "#D8D8D8"
+bright_foreground  = "#ECFFF4"
+cursor             = "#4ADE80"
+bright_cyan        = "#A5F3FC"

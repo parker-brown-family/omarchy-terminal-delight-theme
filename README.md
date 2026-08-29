@@ -225,6 +225,8 @@ rather than in any theme:
 | `bin/build-variants` | derives a full theme from those six keys, and draws the tile |
 | `bin/td-tint` | tint one terminal — text and border — without touching the theme |
 | `bin/td-monitor` | turn the monitor's knobs — rewrite the CONFIG block across the installed family, validate, recompile live |
+| `bin/td-mcp` | the paint surface as MCP tools for agents — see "Agents paint too" |
+| `test/run` | the hermetic test suite (stubs for hyprctl/omarchy-theme-*; no compositor needed) |
 | `install-variants.sh` | builds every variant into `~/.config/omarchy/themes/` |
 | `previews/` | the tiles, as the theme grid shows them |
 
@@ -232,6 +234,35 @@ Copying the directory into `~/.config/omarchy/themes/terminal-delight/`
 yourself keeps all of it, `hyprland.lua` included — a theme you wrote stays
 yours. Then `install-curve.sh` only needs to place the shaders, and it will
 tell you it is skipping the rest.
+
+## Agents paint too
+
+`bin/td-mcp` is the whole surface as an MCP server — stdlib Python, stdio,
+register it once:
+
+```bash
+claude mcp add td-paint -- ~/.local/bin/td-mcp
+```
+
+Tools: `list_variants`, `list_tiles` (every terminal window with its recorded
+variant + saturation), `paint`, `border_only`, `saturate`, `clear`, `sync`,
+`paint_panes` (Terminal Delight's per-pane picker over its control socket),
+`monitor_knobs`, `monitor_set`. Deliberately thin: every tool delegates to
+the same CLI a human runs, so there is one behaviour and the MCP layer can
+never drift from it.
+
+## Tests
+
+```bash
+./test/run
+```
+
+Dependency-free and hermetic: `XDG_*` point into a throwaway tree and
+hyprctl / omarchy-theme-color / omarchy-theme-osc / glslangValidator /
+terminal-delight are logging stubs on `PATH`, so the suite asserts against
+files and call logs, never your live compositor. CI (GitHub Actions) runs
+the suite, shellcheck at warning level, `td-mcp` byte-compilation, and
+compiles every generated frag in BOTH `ANIMATED` states.
 
 ## Light mode
 

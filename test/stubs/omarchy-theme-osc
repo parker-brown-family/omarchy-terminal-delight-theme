@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Test double: announce which palette file would have been written to the tty.
+printf 'OSC-FROM:%s\n' "${1:?colors.toml required}"

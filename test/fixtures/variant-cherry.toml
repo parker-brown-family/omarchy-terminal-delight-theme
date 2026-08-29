@@ -1,0 +1,10 @@
+# fixture: an installed variant palette
+mode = "dark"
+accent             = "#F43C7A"
+muted              = "#2A1520"
+background         = "#0A0407"
+foreground         = "#C7A9B4"
+light_foreground   = "#DCC5CE"
+bright_foreground  = "#F6E9EE"
+cursor             = "#F49CC8"
+bright_cyan        = "#F49CC8"

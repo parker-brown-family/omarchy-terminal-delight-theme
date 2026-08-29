@@ -1,0 +1,34 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq gawk shellcheck glslang-tools imagemagick fonts-noto-color-emoji
+
+      - name: test suite
+        run: ./test/run
+
+      - name: shellcheck
+        run: shellcheck -S warning bin/td-tint bin/td-monitor install-variants.sh install-curve.sh test/run test/stubs/hyprctl test/stubs/omarchy-theme-color
+
+      - name: td-mcp compiles
+        run: python3 -m py_compile bin/td-mcp
+
+      # Every generated frag must compile in BOTH preprocessor states — the
+      # still default and the animated opt-in — because td-monitor can flip
+      # ANIMATED on any of them at runtime.
+      - name: frags compile in both states
+        run: |
+          ./bin/build-variants --into /tmp/themes --reuse-previews
+          for f in crt-glass.frag /tmp/themes/*/crt-glass.frag; do
+            glslangValidator "$f"
+            sed 's/^#define ANIMATED 0/#define ANIMATED 1/' "$f" > /tmp/animated-probe.frag
+            glslangValidator /tmp/animated-probe.frag
+          done

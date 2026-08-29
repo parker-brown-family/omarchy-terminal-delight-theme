@@ -96,8 +96,8 @@ set_knobs() {
       touched_animated=1
     else
       [[ "$v" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || die "'$v' is not a number"
-      grep -qE "^const float $k[[:space:]]*=" "$probe" || die "no such knob: $k (td-monitor to list)"
-      sed -E -i "s|^(const float $k[[:space:]]*=[[:space:]]*)-?[0-9.]+(;.*)$|\1$v\2|" "$probe"
+      grep -qE "^const float ${k}[[:space:]]*=" "$probe" || die "no such knob: $k (td-monitor to list)"
+      sed -E -i "s|^(const float ${k}[[:space:]]*=[[:space:]]*)-?[0-9.]+(;.*)$|\1$v\2|" "$probe"
       case "$k" in TRACKING|FLICKER|JIGGLE) touched_motion=1 ;; esac
     fi
     KNOBS+=("$k=$v")
@@ -123,6 +123,10 @@ set_knobs() {
   echo "set ${KNOBS[*]} across ${#files[@]} file(s)"
   recompile
 }
+
+# Everything below is the command-line surface. Sourcing the file stops here,
+# which is how test/run reaches the helpers above without executing us.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0 2>/dev/null || true; fi
 
 KNOBS=()
 case "${1:-list}" in
