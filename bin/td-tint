@@ -443,6 +443,12 @@ theme="$THEMES/$PREFIX$variant"
 colors="$theme/colors.toml"
 [[ -f $colors ]] || die "$colors is missing — re-run ./install-variants.sh"
 
+# The window first: its record decides whether the fresh coat goes on
+# already-cranked. SATURATE is a property of the TILE, not of the pick —
+# repainting changes the hue, not the crank.
+if [[ -n $TARGET_ADDR ]]; then addr="$TARGET_ADDR"; else addr=$(this_window) || true; fi
+prior_sat="$(rec_sat "${addr:+$RUNDIR/$addr}")"
+
 # 1. the text: the target terminal's own palette, straight down its tty
 # (skipped under --border-only — the tube already shows the right colours)
 if [[ -z $BORDER_ONLY ]]; then
@@ -452,19 +458,26 @@ if [[ -z $BORDER_ONLY ]]; then
     tty=$(this_tty) || true
     [[ -n ${tty:-} ]] || die "not attached to a terminal."
   fi
-  omarchy-theme-osc "$colors" >"$tty"
+  if [[ "$prior_sat" == 1 ]]; then
+    acc=$(omarchy-theme-color --file "$colors" accent)
+    tmp="$(mktemp --suffix=.toml)"
+    saturate_toml "$colors" "$tmp" "$SAT_FACTOR" "$acc"
+    omarchy-theme-osc "$tmp" >"$tty"
+    rm -f "$tmp"
+  else
+    omarchy-theme-osc "$colors" >"$tty"
+  fi
 fi
 
 # 2. the frame: this window's own border, so it reads while unfocused too
 accent=$(omarchy-theme-color --file "$colors" accent)
 partner=$(omarchy-theme-color --file "$colors" bright_cyan "$accent")
-if [[ -n $TARGET_ADDR ]]; then addr="$TARGET_ADDR"; else addr=$(this_window) || true; fi
 set_border "${addr:-}" "rgba(${accent#\#}ee) rgba(${partner#\#}ee) 45deg" "rgba($(dim_hex "$accent")cc)"
 
-# remember the pick, so a later repair restores instead of guessing. A fresh
-# coat resets SATURATE — repainting means "start from the variant as authored".
+# remember the pick, so a later repair restores instead of guessing —
+# carrying SATURATE across it. `--saturate off` is the way to pour it back.
 if [[ -n ${addr:-} ]]; then
-  rec_write "$RUNDIR/$addr" "$variant" 0
+  rec_write "$RUNDIR/$addr" "$variant" "${prior_sat:-0}"
 fi
 
 printf '%s  this terminal is %s\n' "$(glyph_of "$variant")" "$variant"
