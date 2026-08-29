@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# Install this repo the way a stranger would, without touching this machine.
+#
+# Issue #1: the repo was assembled from the working theme at
+# ~/.config/omarchy/themes/terminal-delight and reasoned against
+# omarchy-theme-set's deny list, but `omarchy theme install` had never been
+# run — because running it on the authoring machine does `rm -rf` on that
+# exact directory (omarchy-theme-install:41) and replaces the hand-written
+# theme with a clone.
+#
+# So: run the REAL omarchy-theme-install and the REAL omarchy-theme-set, with
+# HOME pointed at a throwaway tree. Both address every path they write through
+# $HOME, so a sandbox HOME is a clean-machine install in every respect that
+# matters — same clone, same name derivation, same staging, same deny list.
+#
+# What is stubbed is only the part of theme-set that reaches OUT of $HOME: the
+# shell IPC and the ~20 omarchy-restart-*/omarchy-theme-set-* helpers that
+# repaint the live session. They are logged, so the test can still assert they
+# were asked. Nothing here can touch the installed theme.
+#
+#   ./test/install-e2e
+#
+# Needs git and the omarchy bin dir on PATH. Offline: the clone is file://.
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(dirname "$here")"
+
+command -v omarchy-theme-install >/dev/null || { echo "needs Omarchy's bin dir on PATH" >&2; exit 1; }
+
+T="$(mktemp -d)"
+trap 'rm -rf "$T"' EXIT
+
+export HOME="$T/home"
+export XDG_RUNTIME_DIR="$T/run"
+export OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
+
+# Every XDG_* must be redirected too, and to the same places under the sandbox
+# HOME that the defaults would resolve to. omarchy-theme-set addresses
+# $HOME/.local/state directly while install-curve.sh honours XDG_STATE_HOME —
+# so inheriting even one of these from the caller points half the run at the
+# real machine while the other half writes to the sandbox. That is not a
+# hypothetical: it is exactly the hazard issue #1 opens with, and the first
+# version of this file had it.
+export XDG_CONFIG_HOME="$HOME/.config"
+export XDG_STATE_HOME="$HOME/.local/state"
+export XDG_DATA_HOME="$HOME/.local/share"
+export XDG_CACHE_HOME="$HOME/.cache"
+mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$XDG_DATA_HOME" \
+  "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR" "$T/stubs" "$T/log"
+
+# install-curve.sh refuses a machine with no Hyprland config, which is the
+# right call there and would otherwise make this test measure the sandbox
+# rather than the theme.
+mkdir -p "$XDG_CONFIG_HOME/hypr"
+
+# A belt to the braces above: if anything in this run is about to write to a
+# path outside the sandbox, say so and stop rather than touch the real theme.
+[[ $XDG_CONFIG_HOME == "$T"/* && $XDG_STATE_HOME == "$T"/* ]] ||
+  { echo "refusing to run: the sandbox is not sealed" >&2; exit 1; }
+
+# Everything omarchy-theme-set reaches for that lives outside $HOME. Each stub
+# records its argv and succeeds; theme-set's own logic is untouched.
+for cmd in omarchy-shell omarchy-hook omarchy-notification-send \
+  omarchy-theme-switcher omarchy-theme-bg-cache omarchy-theme-extras \
+  omarchy-restart-hyprctl omarchy-restart-terminal omarchy-restart-btop \
+  omarchy-restart-opencode omarchy-restart-helix \
+  omarchy-theme-set-templates omarchy-theme-set-foot omarchy-theme-set-tmux \
+  omarchy-theme-set-gnome omarchy-theme-set-pi omarchy-theme-set-claude \
+  omarchy-theme-set-browser omarchy-theme-set-obsidian \
+  omarchy-theme-set-keyboard omarchy-theme-set-vscode \
+  hyprctl makoctl; do
+  printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" "%s" "$*" >> "%s/calls.log"\nexit 0\n' \
+    "$cmd" "$T/log" > "$T/stubs/$cmd"
+  chmod +x "$T/stubs/$cmd"
+done
+export PATH="$T/stubs:$PATH"
+
+pass=0
+fail=0
+ok() { pass=$((pass + 1)); printf '  \033[32m✓\033[0m %s\n' "$1"; }
+no() { fail=$((fail + 1)); printf '  \033[31m✗\033[0m %s\n' "$1"; }
+have() { if [[ -e "$1" ]]; then ok "$2"; else no "$2 (missing $1)"; fi; }
+lacks() { if [[ -e "$1" ]]; then no "$2 (found $1)"; else ok "$2"; fi; }
+
+# The repo as a stranger's remote. A shallow local clone source keeps this
+# offline and fast, and file:// is a transport omarchy-git-url-check allows.
+remote="$T/remote/omarchy-terminal-delight-theme"
+mkdir -p "$(dirname "$remote")"
+git clone --quiet --no-local "$root" "$remote" 2>/dev/null || {
+  echo "could not stage a local remote from $root" >&2; exit 1; }
+
+echo "— omarchy theme install (the real script, sandboxed HOME)"
+install_out="$(omarchy-theme-install "file://$remote" 2>&1)"
+theme="$HOME/.config/omarchy/themes/terminal-delight"
+if [[ -d $theme ]]; then
+  ok "the URL derives the theme name 'terminal-delight'"
+else
+  no "install did not land a theme dir"
+  printf '%s\n' "$install_out" | sed 's/^/      /'
+  exit 1
+fi
+
+echo "— what the clone carries (issue #1's invalidation list)"
+have "$theme/colors.toml"     "colors.toml"
+have "$theme/backgrounds"     "backgrounds/"
+have "$theme/preview.png"     "preview.png"
+have "$theme/crt-glass.frag"  "crt-glass.frag"
+have "$theme/icons.theme"     "icons.theme"
+if [[ -n "$(find "$theme/backgrounds" -type f -print -quit 2>/dev/null)" ]]; then
+  ok "backgrounds/ is not empty"
+else
+  no "backgrounds/ is empty — the switcher would have nothing to show"
+fi
+
+echo "— what omarchy-theme-set staged (the deny list, for real)"
+staged="$HOME/.local/state/omarchy/current/theme"
+have "$staged/colors.toml"    "colors.toml staged"
+have "$staged/crt-glass.frag" ".frag survives — it is colour, not code"
+have "$staged/icons.theme"    "icons.theme staged"
+have "$staged/backgrounds"    "backgrounds/ staged"
+lacks "$staged/hyprland.lua"  "no .lua reaches the staged theme"
+lacks "$staged/alacritty.toml" "nor a terminal config, which names a program"
+lacks "$staged/vscode.json"   "nor vscode.json, which names an extension"
+if [[ -L "$XDG_STATE_HOME/omarchy/current/background" ]]; then
+  ok "a background was linked, so the switcher has something to preview"
+else
+  no "no current/background link"
+fi
+
+# Not a failure: Omarchy's deny list names what a theme may not CONTRIBUTE,
+# not what it must be. Everything else in the repo — bin/, test/, docs/,
+# previews/ — is copied into the staged theme verbatim, and nothing ever runs
+# it. Worth printing, because it is the difference between a 40 KB staged
+# theme and a 4 MB one, and nobody would otherwise look.
+extras=""
+for entry in "$staged"/* "$staged"/.[!.]*; do
+  [[ -e $entry ]] || continue
+  case "${entry##*/}" in
+    colors.toml | backgrounds | preview.png | crt-glass.frag | icons.theme | .git) ;;
+    *) extras+="${entry##*/} " ;;
+  esac
+done
+[[ -n $extras ]] && printf '    also staged (harmless, never executed): %s\n' "$extras"
+
+echo "— the curve installer, on the theme this install produced"
+curve_out="$(bash "$theme/install-curve.sh" 2>&1)"
+looknfeel="$HOME/.config/hypr/looknfeel.lua"
+if grep -qF "The theme's own hyprland.lua is staged" <<<"$curve_out"; then
+  no "install-curve took the SKIP path — the repo is shipping a hyprland.lua"
+elif [[ -f $looknfeel ]] && grep -q 'crt-glass.frag' "$looknfeel"; then
+  ok "install-curve wrote the look'n'feel block, pointing at the staged shader"
+else
+  no "install-curve wrote no block"
+  printf '%s\n' "$curve_out" | sed 's/^/      /'
+fi
+if bash "$theme/install-curve.sh" --uninstall >/dev/null 2>&1 &&
+   ! grep -q 'crt-glass.frag' "$looknfeel" 2>/dev/null; then
+  ok "…and takes it back out again"
+else
+  no "--uninstall left the block behind"
+fi
+
+echo "— the README's install instructions, against what just happened"
+# The menu path (Super + Space -> Install -> Style -> Theme) and the CLI are
+# the same script; a reader needs at least one of them named, and the CLI is
+# the one this test can actually prove.
+if grep -qE 'omarchy theme install|Install . Style . Theme' "$root/README.md"; then
+  ok "README names an install path, and it is the one this test ran"
+else
+  no "README documents no install path"
+fi
+if grep -qF "omarchy theme install" "$root/README.md"; then
+  ok "…including the CLI form, which is the verifiable one"
+else
+  no "README gives only the menu path — the CLI form is what can be tested"
+fi
+if grep -qF "install-curve.sh" "$root/README.md"; then
+  ok "README documents the curve step, which is NOT automatic"
+else
+  no "README omits install-curve.sh, which the install does not run for you"
+fi
+
+echo
+if [[ $fail -eq 0 ]]; then
+  printf '\033[32mall %d green — a clean install lands and the README matches\033[0m\n' "$pass"
+  exit 0
+fi
+printf '\033[31m%d failing (of %d)\033[0m\n' "$fail" "$((pass + fail))"
+exit 1

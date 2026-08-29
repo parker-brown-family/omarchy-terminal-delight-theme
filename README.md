@@ -34,8 +34,24 @@ Omarchy menu (Super + Space) → Install → Style → Theme
 https://github.com/parker-brown-family/omarchy-terminal-delight-theme
 ```
 
+The same thing from a shell, which is the form `test/install-e2e` exercises:
+
+```bash
+omarchy theme install https://github.com/parker-brown-family/omarchy-terminal-delight-theme
+```
+
 That gets you the colours, the background, and the full-screen glass. It does
 not get you the curve — read on.
+
+Either path clones into `~/.config/omarchy/themes/terminal-delight` (replacing
+whatever is already there, so don't run it on a machine where you hand-wrote
+that directory) and then stages the theme. Omarchy will not stage a `.lua` or a
+terminal config out of an installed theme, because those name programs to run —
+this theme ships neither, so nothing of it is dropped. What lands staged is
+`colors.toml`, `backgrounds/`, `preview.png`, `crt-glass.frag` and
+`icons.theme`. The repo's `bin/`, `test/`, `docs/` and `previews/` are copied
+along with them and never run; they are why the staged directory is a few MB
+rather than a few dozen KB.
 
 ## The curve is a second step, on purpose
 
@@ -332,6 +348,22 @@ terminal-delight are logging stubs on `PATH`, so the suite asserts against
 files and call logs, never your live compositor. CI (GitHub Actions) runs
 the suite, shellcheck at warning level, `td-mcp` byte-compilation, and
 compiles every generated frag in BOTH `ANIMATED` states.
+
+Three more read the real machine, so they are not part of `test/run` and not
+part of CI — they are evidence about the box they ran on, on the day they ran:
+
+```bash
+./test/install-e2e         # a clean install, from clone to staged theme
+./test/probe-cube-demand   # does anything here paint through the 256 cube?
+./test/verify-cube-live    # does a cube slot actually move in a real terminal?
+```
+
+`install-e2e` runs the genuine `omarchy-theme-install` and `omarchy-theme-set`
+with `HOME` and every `XDG_*` pointed at a throwaway tree, so it exercises the
+real clone, the real name derivation and the real staging deny list without
+going anywhere near your installed theme — which matters, because that install
+path begins by deleting it. `verify-cube-live` opens a foot window for about a
+second and asks it, over OSC 4, what colour it is actually holding.
 
 ## Light mode
 
