@@ -229,9 +229,14 @@ td-tint --themes                # what's installed
 
 It is the same `colors.toml`, down the same tty, through the same OSC — the
 only difference is which list the name came from, which is why `--theme`
-carries its own name rather than leaving it positional. Terminal Paint shows
-both lists behind one switch: **TERMINAL DELIGHT** draws the palettes by their
-glyphs, **OMARCHY** draws each installed theme as a swatch of its own colours.
+carries its own name rather than leaving it positional.
+
+[Terminal Paint](https://github.com/parker-brown-family/omarchy-td-palette),
+the workspace picker, offers **only** this list: Omarchy's set is larger and
+already the vocabulary you chose your desktop from, and Terminal Delight is in
+it as one theme, so nothing is out of reach. The palettes stay a command-line
+identity — `td-tint cherry` — which is where a hand-made set of eleven earns
+its keep.
 
 ### The config surface is one file
 
