@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# Check that everything this repo's README claims is actually true on this box.
+#
+#   bin/doctor
+#
+# Read-only. Exits non-zero if a claim is false. Every failure prints the
+# command that fixes it.
+#
+# WHY THIS EXISTS. The test suite catches code regressions and catches them
+# well. What nothing caught was CLAIM DRIFT: a sentence in the README about the
+# running system that quietly stopped being true while every test stayed green.
+# Three of those in one week, all found by accident:
+#
+#   * the per-window warp shaders were absent from the author's own machine for
+#     days — only `.bak` copies remained — while the README promised the curve.
+#     Nothing had been warped or glared here since the glare was written.
+#   * `install-curve.sh` told people to log out and back in. It never needed to;
+#     `hyprctl reload` arms the shaders. Nobody had tested the cheaper path.
+#   * `install-variants.sh` re-pointed ~/.local/bin/td-tint at a build without
+#     `--json`, twice, silently breaking the painter (theme issue #6).
+#
+# Every one of those is invisible to CI, because CI has no compositor and no
+# installed state. This is where that class of defect gets caught.
+#
+# It is deliberately NOT a fixer. A doctor that repairs things is a doctor you
+# stop reading, and the interesting output here is WHICH claim went false.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}"
+DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
+STAGED="$STATE/omarchy/current/theme"
+PALETTES="$DATA/terminal-delight/palettes"
+
+bad=0
+ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
+err()  { bad=$((bad + 1)); printf '  \033[31m✗\033[0m %s\n' "$1"
+         [[ $# -gt 1 ]] && printf '      \033[90m%s\033[0m\n' "$2"
+         [[ $# -gt 2 ]] && printf '      fix: \033[1m%s\033[0m\n' "$3"; return 0; }
+note() { printf '  \033[90m–\033[0m %s\n' "$1"; }
+head_() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+
+has() { command -v "$1" >/dev/null 2>&1; }
+
+# --------------------------------------------------------------- compositor ---
+head_ "the session"
+HYPR=0
+if has hyprctl && hyprctl monitors -j >/dev/null 2>&1; then
+  HYPR=1
+  ok "Hyprland is answering"
+else
+  note "not a live Hyprland session — compositor checks skipped, not failed"
+fi
+
+getopt_int() { hyprctl getoption "$1" 2>/dev/null | awk '/^int:/ { print $2; exit }'; }
+getopt_str() { hyprctl getoption "$1" 2>/dev/null | awk '/^str:/ { $1=""; sub(/^ /,""); print; exit }'; }
+
+# -------------------------------------------------------------------- theme ---
+head_ "the theme"
+worn="$(cat "$STATE/omarchy/current/theme.name" 2>/dev/null || true)"
+if [[ $worn == terminal-delight ]]; then
+  ok "Omarchy is wearing terminal-delight"
+elif [[ -n $worn ]]; then
+  note "the desktop is wearing '$worn' — the checks below still apply to the engine"
+else
+  err "no theme is recorded as current" \
+      "$STATE/omarchy/current/theme.name is missing" \
+      "omarchy theme set 'Terminal Delight'"
+fi
+
+if [[ -f "$STAGED/colors.toml" ]]; then
+  ok "a theme is staged"
+  # The end-to-end one: Omarchy generates every app config from colors.toml, so
+  # if neovim's background is not the staged background, the template pass did
+  # not run with this palette and NOTHING downstream has this theme's colours.
+  sbg="$(grep -m1 '^background' "$STAGED/colors.toml" | grep -oiE '#[0-9a-f]{6}' || true)"
+  nbg="$(grep -m1 'bg = ' "$STAGED/neovim.lua" 2>/dev/null | grep -oiE '#[0-9a-f]{6}' || true)"
+  if [[ -z $nbg ]]; then
+    note "no generated neovim.lua staged — nothing to cross-check the palette against"
+  elif [[ "${sbg,,}" == "${nbg,,}" ]]; then
+    ok "the palette reached the generated app configs (neovim bg = $nbg)"
+  else
+    err "the staged palette and the generated configs disagree" \
+        "colors.toml says $sbg, neovim.lua says $nbg" \
+        "omarchy theme set '$worn'"
+  fi
+else
+  err "no staged theme" "$STAGED/colors.toml is missing" "omarchy theme set 'Terminal Delight'"
+fi
+
+# ------------------------------------------------------------------- glass ---
+if [[ $HYPR -eq 1 ]]; then
+  shader="$(getopt_str decoration:screen_shader)"
+  if [[ -n $shader && -f $shader ]]; then
+    ok "the full-screen glass is armed (${shader/#$HOME/\~})"
+  elif [[ -n $shader ]]; then
+    err "the screen shader points at a file that is not there" "$shader" \
+        "omarchy theme set '$worn'"
+  else
+    note "no screen shader set — the monitor pass is off"
+  fi
+fi
+
+# ------------------------------------------------------------------- curve ---
+head_ "the curve — ./install-curve.sh"
+warp="$CONFIG/hypr/shaders/surface.frag"
+if [[ -f $warp ]] && grep -q terminal-delight "$warp"; then
+  ok "the per-window warp is installed"
+  if [[ $HYPR -eq 1 ]]; then
+    r="$(getopt_int decoration:rounding)"
+    if [[ ${r:-0} -gt 0 ]]; then
+      ok "windows are rounded (decoration:rounding = $r), so the warp variant compiles"
+    else
+      err "rounding is 0, so the warp never compiles and nothing bows" \
+          "the shader is installed but its variant is never built" \
+          "./install-curve.sh   # or set decoration:rounding above 0"
+    fi
+  fi
+elif [[ -f $warp ]]; then
+  err "something else owns surface.frag" "$warp has no terminal-delight marker" \
+      "./install-curve.sh"
+else
+  err "the per-window warp is NOT installed — no window is bowed or glared" \
+      "$warp is missing" \
+      "./install-curve.sh   # it reloads Hyprland for you, no relogin"
+fi
+
+# ------------------------------------------------------------------ engine ---
+head_ "the engine — ./install-variants.sh"
+if has td-tint; then
+  ok "td-tint on PATH ($(command -v td-tint | sed "s|^$HOME|~|") -> $(readlink -f "$(command -v td-tint)" | sed "s|^$HOME|~|"))"
+  # The symlink-downgrade trap, which fired twice: install-variants.sh run from
+  # an older checkout re-points ~/.local/bin/td-tint at a build that lacks the
+  # verbs everything downstream needs. Asking td-tint itself is the only honest
+  # test, because the path looks identical either way.
+  stale=""
+  td-tint --themes-json >/dev/null 2>&1 || stale="$stale --themes-json"
+  td-tint --state 2>/dev/null | grep -q '"crt"' || stale="$stale --state:crt"
+  td-tint --state 2>/dev/null | grep -q '"desktop_theme"' || stale="$stale --state:desktop_theme"
+  if [[ -z $stale ]]; then
+    ok "…and it is current: --themes-json, --crt and desktop_theme all answer"
+  else
+    err "td-tint is behind — the painter will not work" \
+        "missing:$stale" \
+        "./install-variants.sh   # from THIS checkout, not an older one"
+  fi
+else
+  err "td-tint is not on PATH" "nothing can paint a single terminal" "./install-variants.sh"
+fi
+
+for t in td-monitor td-mcp; do
+  has "$t" && ok "$t on PATH" || err "$t is not on PATH" "" "./install-variants.sh"
+done
+
+n_pal="$(find "$PALETTES" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+n_want="$(grep -c '^\[' "$root/variants.toml" 2>/dev/null || echo 0)"
+if [[ $n_pal -gt 0 && $n_pal -eq $n_want ]]; then
+  ok "$n_pal palettes installed"
+elif [[ $n_pal -gt 0 ]]; then
+  err "$n_pal palettes installed, but variants.toml declares $n_want" "" "./install-variants.sh"
+else
+  err "no palettes installed" "$PALETTES is empty or missing" "./install-variants.sh"
+fi
+
+hook="$CONFIG/omarchy/hooks/theme-set.d/td-tint-sync.hook"
+if [[ -x $hook || ( -L $hook && -x "$(readlink -f "$hook")" ) ]]; then
+  ok "the theme-set hook is armed — picks survive a theme switch"
+else
+  err "the theme-set hook is missing" \
+      "per-window border props outlive theme switches with nothing to reconcile them" \
+      "./install-variants.sh"
+fi
+
+# --------------------------------------------------------------- theme grid ---
+head_ "the theme grid"
+leftovers="$(find "$CONFIG/omarchy/themes" -mindepth 1 -maxdepth 1 -type d \
+             -name 'terminal-delight-*' 2>/dev/null | wc -l)"
+if [[ $leftovers -eq 0 ]]; then
+  ok "one Terminal Delight, no leftover variant themes"
+else
+  err "$leftovers leftover variant theme(s) are polluting the grid" \
+      "palettes stopped being themes in v0.2.0" \
+      "./install-variants.sh   # it retires them"
+fi
+
+# ------------------------------------------------------------ Terminal Paint ---
+head_ "Terminal Paint (optional)"
+plug="$CONFIG/omarchy/plugins/brownfamilysports.td-palette"
+if [[ -d $plug ]]; then
+  ok "installed, v$(jq -r '.version // "?"' "$plug/manifest.json" 2>/dev/null)"
+  if has omarchy && omarchy plugin list 2>/dev/null | grep -q 'brownfamilysports.td-palette *enabled'; then
+    ok "enabled"
+  else
+    note "installed but not enabled — omarchy plugin enable brownfamilysports.td-palette"
+  fi
+  # The claim the picker itself makes: on a box without the warp it hides the
+  # CRT switch. Worth reporting here because a missing switch is indistinguishable
+  # from a missing feature unless something says which.
+  if has td-tint && td-tint --state 2>/dev/null | grep -q '"available": *true'; then
+    ok "its CRT switch will be drawn (crt.available = true)"
+  else
+    note "its CRT switch will be hidden — the per-window warp is not installed"
+  fi
+else
+  note "not installed — omarchy plugin add https://github.com/parker-brown-family/omarchy-td-palette.git --enable"
+fi
+
+printf '\n%s\n' "$(printf '─%.0s' {1..64})"
+if [[ $bad -eq 0 ]]; then
+  printf '\033[32meverything this README claims is true on this box\033[0m\n'
+else
+  printf '\033[31m%d claim(s) are false here.\033[0m The fix is beside each one.\n' "$bad"
+  exit 1
+fi

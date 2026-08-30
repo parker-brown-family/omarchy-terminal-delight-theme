@@ -446,6 +446,24 @@ cannot reach `--theme` or `--crt` is a façade with holes in it.
 ## Tests
 
 ```bash
+./bin/doctor
+```
+
+Checks that everything this README claims is actually true on **this** box:
+the theme is worn and its palette reached the generated app configs, the glass
+is armed, the per-window warp is installed *and* rounding is non-zero so its
+variant compiles, `td-tint` is on `PATH` **and current**, the palettes and the
+theme-set hook are in place, the grid holds one Terminal Delight, and Terminal
+Paint's CRT switch will actually be drawn. Read-only; every failure prints the
+command that fixes it.
+
+It exists because the suite below cannot see any of that. Three claims here
+went quietly false in one week — the warp shaders vanished from the author's own
+machine, the installer told people to log out for no reason, and an older
+`install-variants.sh` downgraded `td-tint` twice — and every test stayed green
+through all of it.
+
+```bash
 ./test/run
 ```
 

@@ -92,4 +92,8 @@ Tint one terminal without touching the others:
 Or paint every tile on the workspace at once, with Terminal Paint:
 
   Super + Alt + P
+
+Check the whole install at any time — it says what is missing and how to fix it:
+
+  ./bin/doctor
 TIP
