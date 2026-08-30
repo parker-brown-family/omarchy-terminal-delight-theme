@@ -189,6 +189,37 @@ printf '%s\n' '# Generated from variants.toml by bin/build-variants. Edit the si
 [[ ! -e "$prune_root/terminal-delight-surfwood" ]] && ok "stale generated variant removed" || no "stale generated variant removed"
 [[ -e "$prune_root/terminal-delight-hand-painted" ]] && ok "similarly named hand-painted theme preserved" || no "similarly named hand-painted theme preserved"
 [[ -e "$prune_root/terminal-delight-tide" ]] && ok "declared Tide variant preserved" || no "declared Tide variant preserved"
+
+# The real-install path, with a fake HOME so it is hermetic. Omarchy keeps only
+# the NAME of the theme it is wearing; the rendered copy lives elsewhere. Prune
+# that name and the desktop still draws but can never be re-applied, cycled, or
+# have its background changed — so a stale variant you are WEARING is reported
+# and kept. This is not hypothetical: the box this was written on was wearing
+# `terminal-delight-surfwood` at the time.
+echo "— the theme you are wearing survives the prune"
+fake="$T/fakehome"
+mkdir -p "$fake/.config/omarchy/themes/terminal-delight-surfwood" \
+  "$fake/.config/omarchy/themes/terminal-delight-badger" \
+  "$fake/.local/state/omarchy/current"
+printf '%s\n' '# Generated from variants.toml by bin/build-variants. Edit the six keys' \
+  >"$fake/.config/omarchy/themes/terminal-delight-surfwood/colors.toml"
+printf '%s\n' '# Generated from variants.toml by bin/build-variants. Edit the six keys' \
+  >"$fake/.config/omarchy/themes/terminal-delight-badger/colors.toml"
+printf 'terminal-delight-surfwood\n' >"$fake/.local/state/omarchy/current/theme.name"
+worn_out="$(HOME="$fake" "$root/bin/build-variants" --reuse-previews 2>&1)"
+[[ -e "$fake/.config/omarchy/themes/terminal-delight-surfwood" ]] &&
+  ok "the worn stale variant is kept, not orphaned" ||
+  no "the worn stale variant is kept, not orphaned"
+grep -q "KEPT stale" <<<"$worn_out" &&
+  ok "and it says so, with the way out" ||
+  no "and it says so, with the way out"
+
+# …while a stale variant you are NOT wearing still goes, in the same run.
+printf 'terminal-delight-badger\n' >"$fake/.local/state/omarchy/current/theme.name"
+HOME="$fake" "$root/bin/build-variants" --reuse-previews >/dev/null 2>&1
+[[ ! -e "$fake/.config/omarchy/themes/terminal-delight-surfwood" ]] &&
+  ok "once you switch away, it is removed" ||
+  no "once you switch away, it is removed"
 echo
 if [[ "$fail" -eq 0 ]]; then
   printf '\033[32mall %d green\033[0m\n' "$pass"

@@ -327,16 +327,45 @@ def preview_tile(key, v, p, out):
 GENERATED_MARKER = "Generated from variants.toml by bin/build-variants."
 
 
-def prune_stale_variants(dest, live_keys):
-    """Remove generated variants no longer present in variants.toml."""
-    for theme in dest.glob("terminal-delight-*"):
+def active_theme(home):
+    """The theme Omarchy is currently wearing, or None if it can't be read.
+
+    Omarchy copies the chosen theme into ~/.local/state/omarchy/current/theme
+    and remembers only its NAME here; the copy is what renders, but every
+    re-apply resolves that name back to a directory under themes/.
+    """
+    try:
+        return (home / ".local/state/omarchy/current/theme.name").read_text().strip()
+    except OSError:
+        return None
+
+
+def prune_stale_variants(dest, live_keys, protect=None):
+    """Remove generated variants no longer present in variants.toml.
+
+    `protect` is the theme name Omarchy currently points at. Deleting THAT is
+    how you hand someone a desktop that renders (the live copy survives) but
+    cannot be re-applied, cycled, or have its background changed — the name
+    resolves to nothing. So it is reported and kept, not removed: renaming a
+    variant you are wearing is a migration, and a build script is the wrong
+    place to migrate someone's desktop out from under them.
+    """
+    for theme in sorted(dest.glob("terminal-delight-*")):
         if theme.name.removeprefix("terminal-delight-") in live_keys:
             continue
 
         colors = theme / "colors.toml"
-        if colors.is_file() and GENERATED_MARKER in colors.read_text():
-            shutil.rmtree(theme)
-            print(f"  removed stale -> {theme}")
+        if not (colors.is_file() and GENERATED_MARKER in colors.read_text()):
+            continue
+
+        if theme.name == protect:
+            print(f"  KEPT stale -> {theme}")
+            print("    it is the theme you are wearing. Switch away first:")
+            print("      omarchy theme set <another>   # then re-run this")
+            continue
+
+        shutil.rmtree(theme)
+        print(f"  removed stale -> {theme}")
 
 
 # -------------------------------------------------------------------- main ---
@@ -367,7 +396,11 @@ def main():
     # similarly named hand-written themes are left alone. A partial --only build
     # cannot know whether the other installed variants are intentionally absent.
     if not args.only and not args.previews_only:
-        prune_stale_variants(dest, variants)
+        # The active-theme guard only matters for the real install: a build
+        # sent elsewhere with --into is not what the desktop resolves against,
+        # so there is nothing over there to orphan.
+        protect = None if args.into else active_theme(pathlib.Path.home())
+        prune_stale_variants(dest, variants, protect=protect)
 
     for key, v in variants.items():
         if args.only and key != args.only:
