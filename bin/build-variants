@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
-"""Generate the Terminal Delight variant themes from variants.toml.
+"""Generate the Terminal Delight palettes from variants.toml.
 
-Each variant in variants.toml becomes a complete Omarchy theme directory:
-a full colours palette derived from six keys, the curve's hyprland.lua with
-the variant's border gradient, a tinted background, and a preview tile whose
-face is the variant's glyph — which is what Omarchy's theme grid shows.
+Each variant becomes a PALETTE — a directory holding the full colours file
+derived from its six keys, plus the glyph that labels it. Palettes live in
+~/.local/share/terminal-delight/palettes and are worn by one terminal at a
+time, through Terminal Paint. They are deliberately NOT Omarchy themes:
+Omarchy's theme grid answers "what does this desktop look like", and eleven
+Terminal Delight entries in it are eleven wrong answers to that question.
+The grid carries exactly one Terminal Delight; the palettes are what the
+painter offers per tile.
 
-Nothing here is clever. Six colours in, one theme out.
+--as-themes still builds the old full-theme form — colours, the curve's
+hyprland.lua, the retinted monitor pass, a tinted background and a preview
+tile — for anyone who does want a variant to be the whole desktop.
+
+Nothing here is clever. Six colours in, one palette out.
 """
 
 import argparse
+import os
 import pathlib
 import re
 import shutil
@@ -324,13 +333,92 @@ def preview_tile(key, v, p, out):
              "-depth", "8", "-strip", str(out)])
 
 
+# ------------------------------------------------------------- palettes ---
+
+# The marker every generated colours file carries. It is what makes retiring
+# the old theme form safe: a directory is only removed when this repo wrote
+# it, so a hand-made theme that happens to be named like a variant survives.
+GENERATED_MARKER = "Generated from variants.toml by bin/build-variants."
+
+
+def palette_home():
+    """Where palettes live. XDG data, not Omarchy's theme directory — the
+    whole point of the move is that a palette is not a desktop theme."""
+    data = os.environ.get("XDG_DATA_HOME") or (pathlib.Path.home() / ".local/share")
+    return pathlib.Path(data) / "terminal-delight/palettes"
+
+
+def active_theme_name(home):
+    """The theme Omarchy is currently wearing, or None if it cannot be read.
+
+    Omarchy COPIES the chosen theme into ~/.local/state/omarchy/current/theme
+    and remembers only its name here; the copy is what renders, but every
+    re-apply, cycle and background change resolves that name back to a
+    directory under themes/.
+    """
+    try:
+        return (home / ".local/state/omarchy/current/theme.name").read_text().strip()
+    except OSError:
+        return None
+
+
+def retire_variant_themes(themes_dir):
+    """Remove the generated `terminal-delight-<key>` THEMES.
+
+    They were the old delivery: every variant its own entry in Omarchy's
+    grid. The grid keeps one Terminal Delight now and the variants are
+    palettes, so these directories are the pollution this build exists to
+    clear. Only ours go — the marker decides — and the base `terminal-delight`
+    theme is never touched, being the one entry we want to keep.
+
+    If the desktop is WEARING one, it is switched to the base theme first.
+    Deleting the directory a live theme name resolves to leaves a desktop that
+    renders (the copy survives) but can never be re-applied or have its
+    background cycled, and a half-broken desktop is a worse outcome than a
+    changed one. The switch is announced, and it is one command to undo.
+    """
+    doomed = []
+    for theme in sorted(themes_dir.glob("terminal-delight-*")):
+        colors = theme / "colors.toml"
+        try:
+            if not (colors.is_file() and GENERATED_MARKER in colors.read_text()):
+                continue
+        except OSError:
+            continue
+        doomed.append(theme)
+
+    if not doomed:
+        return
+
+    worn = active_theme_name(pathlib.Path.home())
+    if worn in {t.name for t in doomed}:
+        print(f"  the desktop is wearing {worn}, which is now a palette.")
+        if shutil.which("omarchy-theme-set"):
+            subprocess.run(["omarchy-theme-set", "terminal-delight"], check=False)
+            print("  switched the desktop to Terminal Delight.")
+        else:
+            print("  omarchy-theme-set is not on PATH — switch away, then re-run:")
+            print("    omarchy theme set 'Terminal Delight'")
+            return
+
+    for theme in doomed:
+        shutil.rmtree(theme)
+        print(f"  retired theme -> {theme}")
+    print(f"  {len(doomed)} variant theme(s) left the theme grid; they are palettes now.")
+
+
 # -------------------------------------------------------------------- main ---
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Build the Terminal Delight variant themes.")
+    ap = argparse.ArgumentParser(description="Build the Terminal Delight palettes.")
     ap.add_argument("--into", default=None,
-                    help="where the theme dirs go (default ~/.config/omarchy/themes)")
+                    help="where the built directories go (default: the palette home, "
+                         "or ~/.config/omarchy/themes under --as-themes)")
+    ap.add_argument("--as-themes", action="store_true",
+                    help="build the full Omarchy-theme form instead of palettes — "
+                         "colours, hyprland.lua, the retinted monitor pass, a "
+                         "background and a preview tile")
     ap.add_argument("--previews-only", action="store_true",
                     help="only refresh previews/ in the repo")
     ap.add_argument("--reuse-previews", action="store_true",
@@ -353,8 +441,23 @@ def main():
     repo_previews = REPO / "previews"
     repo_previews.mkdir(exist_ok=True)
 
-    dest = pathlib.Path(args.into).expanduser() if args.into else \
-        pathlib.Path.home() / ".config/omarchy/themes"
+    if args.into:
+        dest = pathlib.Path(args.into).expanduser()
+    elif args.as_themes:
+        dest = pathlib.Path.home() / ".config/omarchy/themes"
+    else:
+        dest = palette_home()
+
+    # The migration, and the only place it happens: a box that installed the
+    # variants back when they WERE themes still has eleven of them sitting in
+    # the theme grid. Retiring the form without retiring the directories would
+    # leave the grid exactly as wrong as before.
+    if not args.as_themes and not args.into and not args.previews_only and not args.only:
+        retire_variant_themes(pathlib.Path.home() / ".config/omarchy/themes")
+
+    # A palette needs no tile: nothing shows it in a gallery. Under --as-themes
+    # the tile IS the theme's face in Omarchy's grid, so it is still drawn.
+    want_previews = args.as_themes or args.previews_only
 
     for key, v in variants.items():
         if args.only and key != args.only:
@@ -364,14 +467,24 @@ def main():
         # The gallery tile is pure colour — nothing else in a variant reaches it —
         # so a shader-only rebuild may reuse it instead of paying ~30 s of
         # ImageMagick per variant.
-        if args.reuse_previews:
-            if not (repo_previews / f"{key}.png").exists():
-                sys.exit(f"--reuse-previews, but previews/{key}.png is missing — run once without it")
-        else:
-            preview_tile(key, v, p, repo_previews / f"{key}.png")
+        if want_previews:
+            if args.reuse_previews:
+                if not (repo_previews / f"{key}.png").exists():
+                    sys.exit(f"--reuse-previews, but previews/{key}.png is missing — run once without it")
+            else:
+                preview_tile(key, v, p, repo_previews / f"{key}.png")
 
         if args.previews_only:
             print(f"  {v['glyph']}  {key:<12} preview")
+            continue
+
+        if not args.as_themes:
+            pal = dest / key
+            pal.mkdir(parents=True, exist_ok=True)
+            (pal / "colors.toml").write_text(colors_toml(key, v, p))
+            # td-tint reads this to label the terminal it just painted
+            (pal / "glyph").write_text(v["glyph"] + "\n")
+            print(f"  {v['glyph']}  {key:<12} -> {pal}")
             continue
 
         theme = dest / f"terminal-delight-{key}"
@@ -413,9 +526,16 @@ def main():
 
         print(f"  {v['glyph']}  {key:<12} -> {theme}")
 
-    if not args.previews_only:
-        print(f"\n{len(variants)} variants installed. Pick one with the theme grid:")
+    if args.previews_only:
+        return
+    count = 1 if args.only else len(variants)
+    if args.as_themes:
+        print(f"\n{count} variant theme(s) installed. Pick one with the theme grid:")
         print("  Super + Shift + Ctrl + Space")
+    else:
+        print(f"\n{count} palette(s) installed. Paint a terminal with them:")
+        print("  Super + Alt + P        the painter, one card per tile")
+        print("  td-tint cherry         …or this terminal, from a prompt")
 
 
 if __name__ == "__main__":

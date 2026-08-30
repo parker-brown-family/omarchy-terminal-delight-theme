@@ -15,6 +15,12 @@ trap 'rm -rf "$T"' EXIT
 export XDG_CONFIG_HOME="$T/config"
 export XDG_STATE_HOME="$T/state"
 export XDG_RUNTIME_DIR="$T/run"
+# Two more roots since td-tint grew a second source: the palette home (XDG
+# data) and Omarchy's own theme directory. Left unset they resolve to the real
+# ones, and a suite that reads the developer's installed themes passes or
+# fails on what happens to be on the box.
+export XDG_DATA_HOME="$T/data"
+export OMARCHY_PATH="$T/omarchy"
 export TD_TEST_LOG="$T/log"
 export TD_TEST_FIXTURES="$here/fixtures"
 export PATH="$here/stubs:$root/bin:$PATH"
@@ -23,7 +29,25 @@ mkdir -p "$T/log" "$T/run" \
   "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-cherry" \
   "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-bat" \
   "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight" \
+  "$XDG_CONFIG_HOME/omarchy/themes/nord" \
+  "$OMARCHY_PATH/themes/nord" \
+  "$OMARCHY_PATH/themes/osaka-jade" \
+  "$OMARCHY_PATH/themes/retro-82" \
   "$XDG_STATE_HOME/omarchy/current/theme"
+
+# The second source: two shipped themes, one shipped-and-overridden name, and
+# the ONE Terminal Delight the theme grid is supposed to carry. The generated
+# `terminal-delight-<key>` directories beside it are palettes in the old
+# shape and must never appear in this list.
+cp "$here/fixtures/theme-colors.toml" "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight/colors.toml"
+printf 'accent = "#509475"\nbackground = "#111c18"\nforeground = "#C1C497"\nbright_cyan = "#8CD3CB"\n' \
+  > "$OMARCHY_PATH/themes/osaka-jade/colors.toml"
+printf 'accent = "#AA5500"\nbackground = "#100C08"\nforeground = "#D8C8B0"\n' \
+  > "$OMARCHY_PATH/themes/retro-82/colors.toml"
+printf 'accent = "#111111"\nbackground = "#000000"\nforeground = "#EEEEEE"\n' \
+  > "$OMARCHY_PATH/themes/nord/colors.toml"
+printf 'accent = "#88C0D0"\nbackground = "#2E3440"\nforeground = "#D8DEE9"\n' \
+  > "$XDG_CONFIG_HOME/omarchy/themes/nord/colors.toml"
 
 cp "$here/fixtures/variant-cherry.toml" "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-cherry/colors.toml"
 printf '🍒\n' > "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-cherry/glyph"
@@ -117,12 +141,65 @@ rec_write "$rec" "-" 0
 assert_eq "no-variant records as dash" "$(rec_variant "$rec")" "-"
 assert_eq "sat=0 writes no sat line" "$(rec_sat "$rec")" ""
 
+echo "— resolving a pick to the palette that paints it"
+assert_eq "a palette key resolves in the palette set" \
+  "$(base_for cherry td)" "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-cherry/colors.toml"
+assert_eq "a theme name resolves in Omarchy's set" \
+  "$(base_for osaka-jade omarchy)" "$OMARCHY_PATH/themes/osaka-jade/colors.toml"
+assert_eq "a user theme shadows the shipped one of the same name" \
+  "$(base_for nord omarchy)" "$XDG_CONFIG_HOME/omarchy/themes/nord/colors.toml"
+if base_for osaka-jade td >/dev/null 2>&1; then
+  no "the two namespaces stay separate (a theme is not a palette)"
+else
+  ok "the two namespaces stay separate (a theme is not a palette)"
+fi
+if base_for nosuchthing omarchy >/dev/null 2>&1; then
+  no "an unknown name fails instead of guessing a path"
+else
+  ok "an unknown name fails instead of guessing a path"
+fi
+assert_eq "theme_label title-cases a dashed name" "$(theme_label osaka-jade)" "Osaka Jade"
+assert_eq "…and leaves digits alone" "$(theme_label retro-82)" "Retro 82"
+
+echo "— records remember which list a pick came from"
+srec="$T/run/td-tint-srcrec-test"
+rec_write "$srec" osaka-jade 0 omarchy
+assert_eq "an Omarchy pick records its source" "$(rec_src "$srec")" "omarchy"
+rec_write "$srec" cherry 1
+assert_eq "a palette pick records none, and reads as the palette set" "$(rec_src "$srec")" "td"
+assert_eq "…without disturbing the crank" "$(rec_sat "$srec")" "1"
+assert_eq "a record written before there were two sources reads as a palette" \
+  "$(printf 'cherry\n' > "$srec"; rec_src "$srec")" "td"
+
 echo "— td-tint --json"
 json="$(bash "$root/bin/td-tint" --json)"
 assert_eq "json lists both installed variants" "$(jq 'length' <<<"$json")" "2"
 assert_eq "json carries the glyph" "$(jq -r '.[] | select(.key=="cherry") | .glyph' <<<"$json")" "🍒"
 assert_eq "json carries accent" "$(jq -r '.[] | select(.key=="cherry") | .accent' <<<"$json")" "#F43C7A"
 assert_has "json carries the partner colour" "$json" '"partner"'
+assert_eq "a palette's label is its own key" "$(jq -r '.[] | select(.key=="cherry") | .label' <<<"$json")" "cherry"
+assert_has "json carries the swatch background" "$json" '"bg"'
+assert_has "json carries the swatch foreground" "$json" '"fg"'
+
+echo "— td-tint --themes / --themes-json (the second source)"
+tj="$(bash "$root/bin/td-tint" --themes-json)"
+assert_eq "themes-json unions user and shipped themes, deduped by name" "$(jq 'length' <<<"$tj")" "4"
+assert_eq "the ONE Terminal Delight is a theme, and stays one" \
+  "$(jq '[.[] | select(.key == "terminal-delight")] | length' <<<"$tj")" "1"
+assert_eq "the palettes are NOT themes — the grid carries one entry, not twelve" \
+  "$(jq '[.[] | select(.key | startswith("terminal-delight-"))] | length' <<<"$tj")" "0"
+assert_eq "a theme is labelled the way Omarchy's own picker names it" \
+  "$(jq -r '.[] | select(.key=="osaka-jade") | .label' <<<"$tj")" "Osaka Jade"
+assert_eq "a theme card carries no glyph — it is drawn as its own swatch" \
+  "$(jq -r '.[] | select(.key=="osaka-jade") | .glyph' <<<"$tj")" ""
+assert_eq "the swatch gets the theme's real colours" \
+  "$(jq -r '.[] | select(.key=="osaka-jade") | [.accent, .bg, .fg] | @tsv' <<<"$tj")" \
+  "$(printf '#509475\t#111c18\t#C1C497')"
+assert_eq "a theme with no bright_cyan still gets a partner colour" \
+  "$(jq -r '.[] | select(.key=="retro-82") | .partner' <<<"$tj")" "#AA5500"
+assert_eq "the user's nord wins over the shipped one" \
+  "$(jq -r '.[] | select(.key=="nord") | .accent' <<<"$tj")" "#88C0D0"
+assert_has "--themes lists them by name" "$(bash "$root/bin/td-tint" --themes)" "osaka-jade"
 
 echo "— td-tint --sync"
 mkdir -p "$XDG_RUNTIME_DIR/td-tint"
@@ -153,6 +230,9 @@ echo "— td-tint --state (the oracle)"
 state="$(bash "$root/bin/td-tint" --state)"
 assert_eq "state sees the four terminal tiles, not chrome" "$(jq '.tiles | length' <<<"$state")" "4"
 assert_eq "state carries the variant contract" "$(jq '.variants | length' <<<"$state")" "2"
+assert_eq "…and the theme contract beside it" "$(jq '.themes | length' <<<"$state")" "4"
+assert_eq "a tile reports which list its pick came from" \
+  "$(jq -r '.tiles[] | select(.address=="0xaaa") | .source' <<<"$state")" "td"
 assert_eq "state names the active workspace" "$(jq '.active_workspace' <<<"$state")" "1"
 assert_eq "state carries the focused window" "$(jq -r '.focused' <<<"$state")" "0xbbb"
 assert_eq "state carries the monitor offset" "$(jq -c '[.monitor.x, .monitor.y]' <<<"$state")" "[0,0]"
@@ -231,7 +311,7 @@ if [[ $? -eq 0 ]]; then ok "the leading options parse in either order"; else no 
 
 err="$(bash "$root/bin/td-tint" --window 0xaaa -- --clear 2>&1)"
 if [[ $? -ne 0 ]]; then ok "-- really terminates: --clear after it is a name, not a verb"; else no "-- really terminates"; fi
-assert_has "…and is reported as an unknown variant" "$err" "no variant '--clear'"
+assert_has "…and is reported as an unknown palette" "$err" "no palette '--clear'"
 
 echo "— variant keys are constrained at the source"
 bad="$(grep -oP '^\[\K[^]]+' "$root/variants.toml" | grep -vE '^[a-z0-9][a-z0-9-]*$')"
@@ -247,6 +327,49 @@ assert_has "build-variants refuses a dash-leading key" \
   "$(cd "$fake" && python3 bin/build-variants --previews-only 2>&1)" "bad variant key"
 assert_has "install-variants' uninstall reader skips it too" \
   "$(printf '[-evil]\n[cherry]\n' | grep -oP '^\[\K[a-z0-9][a-z0-9-]*' | tr '\n' ' ')" "cherry"
+
+echo "— painting a tile with an Omarchy theme"
+# Deliberately after the count assertions above: this repaints 0xaaa, which
+# those blocks read.
+: > "$TD_TEST_LOG/hyprctl.log"
+out="$(bash "$root/bin/td-tint" --window 0xaaa --border-only --theme osaka-jade 2>&1)"
+assert_has "it says which theme the terminal now wears" "$out" "Osaka Jade"
+hlog="$(cat "$TD_TEST_LOG/hyprctl.log")"
+assert_has "the frame takes the theme's own accent" "$hlog" 'active_border_color", value = "rgba(509475ee)'
+assert_eq "the pick is recorded under the theme's name" "$(rec_variant "$XDG_RUNTIME_DIR/td-tint/0xaaa")" "osaka-jade"
+assert_eq "…and under the list it came from" "$(rec_src "$XDG_RUNTIME_DIR/td-tint/0xaaa")" "omarchy"
+
+: > "$TD_TEST_LOG/hyprctl.log"
+bash "$root/bin/td-tint" --sync >/dev/null
+assert_has "--sync re-frames an Omarchy-sourced pick from its own theme" \
+  "$(cat "$TD_TEST_LOG/hyprctl.log")" 'rgba(509475ee)'
+assert_eq "…and the sweep leaves the source alone" "$(rec_src "$XDG_RUNTIME_DIR/td-tint/0xaaa")" "omarchy"
+assert_eq "the oracle reports the tile's source to the picker" \
+  "$(bash "$root/bin/td-tint" --state | jq -r '.tiles[] | select(.address=="0xaaa") | .source')" "omarchy"
+
+err="$(bash "$root/bin/td-tint" --window 0xaaa --theme nosuchtheme 2>&1)"
+if [[ $? -ne 0 ]]; then ok "an unknown theme is refused"; else no "an unknown theme is refused"; fi
+assert_has "…and the refusal names the list to look in" "$err" "td-tint --themes"
+
+err="$(bash "$root/bin/td-tint" --theme nord cherry 2>&1)"
+if [[ $? -ne 0 ]]; then ok "--theme with a stray second name is refused"; else no "--theme with a stray second name is refused"; fi
+assert_has "…and the refusal shows the shape that works" "$err" "td-tint --theme 'nord'"
+
+echo "— the palette home retires the theme-shaped install"
+# Last, because it changes what `variants()` answers: the point of the new
+# home is that it REPLACES the old one rather than adding to it.
+mkdir -p "$XDG_DATA_HOME/terminal-delight/palettes/tide"
+cp "$here/fixtures/variant-cherry.toml" "$XDG_DATA_HOME/terminal-delight/palettes/tide/colors.toml"
+printf '\xf0\x9f\x8c\x8a\n' > "$XDG_DATA_HOME/terminal-delight/palettes/tide/glyph"
+list="$(bash "$root/bin/td-tint" --list)"
+assert_has "the palette home is read" "$list" "tide"
+assert_lacks "…and the theme-shaped install is not read beside it (no doubles)" "$list" "cherry"
+assert_eq "the card contract follows the same single home" \
+  "$(bash "$root/bin/td-tint" --json | jq 'length')" "1"
+assert_eq "a palette in the new home still carries its glyph" \
+  "$(bash "$root/bin/td-tint" --json | jq -r '.[0].glyph')" "🌊"
+assert_eq "the theme list is unmoved by any of it" \
+  "$(bash "$root/bin/td-tint" --themes-json | jq 'length')" "4"
 
 echo
 if [[ "$fail" -eq 0 ]]; then
