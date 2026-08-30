@@ -156,42 +156,87 @@ Three things worth knowing before you install it:
   theme pins its window class to `rounding = 0` — otherwise it gets bent
   twice.
 
-## Nine terminals you can tell apart
+## Eleven terminals you can tell apart
 
-![the variant set](previews/gallery.png)
+![the palette set](previews/gallery.png)
 
 A wall of terminals that all look the same is a wall of terminals you have to
-read to navigate. So the theme ships a set: one glyph, one hue, one identity
-each.
+read to navigate. So the theme ships a set of **palettes**: one glyph, one hue,
+one identity each.
 
 ```bash
 ./install-variants.sh
 ```
 
-Then open Omarchy's own theme grid and click one:
+Then paint the workspace — one card over every terminal tile:
 
 ```
-Super + Shift + Ctrl + Space
+Super + Alt + P          Terminal Paint
+td-tint cherry           …or just this terminal, from a prompt
 ```
 
-That grid is already an image picker with labelled thumbnails, so there is no
-second UI to build and nothing new to learn — the variants just show up in it,
-clustered together under `Terminal Delight …`, each wearing its glyph.
-
-| | Variant | Reads as |
+| | Palette | Reads as |
 |---|---|---|
 | 🪵 | wood | warm oak, the quiet one |
-| ☢️ | radioactive | acid green, impossible to miss |
-| 🦇 | bat | violet dusk |
+| ☢️ | nuclear | the mid-century atomic board: trefoil yellow to teal |
+| 🦇 | violet | violet dusk |
 | 🍍 | pineapple | gold with a green leaf |
-| 🪖 | soldier | olive drab, muted on purpose |
+| 🪖 | army | olive drab, muted on purpose |
 | 🔥 | ember | forge red |
 | ❄️ | glacier | ice cyan |
 | 🌊 | tide | deep cobalt |
 | 🍒 | cherry | rose crimson |
+| 🌆 | retro | neon skyline, magenta to cyan |
+| 🦡 | badger | strict equal-RGB greyscale |
 
 Remove them again with `./install-variants.sh --uninstall`. The base theme is
 left alone.
+
+### A palette is not a theme
+
+The palettes live in `~/.local/share/terminal-delight/palettes/`, not in
+Omarchy's theme directory, and that is deliberate.
+
+Omarchy's theme grid answers one question: *what does this desktop look like?*
+Eleven Terminal Delight entries in it are eleven wrong answers — you scroll
+past ten near-identical thumbnails to reach the theme you actually meant, and
+picking one repaints the whole desktop when what you wanted was to tell one
+terminal from the next. So the grid carries **exactly one** Terminal Delight,
+and the eleven identities live where they belong: in the painter, aimed at a
+tile.
+
+If you do want a variant as the whole desktop, the full theme form is still
+there — colours, `hyprland.lua`, the retinted monitor pass, a tinted
+background and a gallery tile:
+
+```bash
+./bin/build-variants --as-themes --only tide
+```
+
+An install from before this move had all eleven in the grid; the build retires
+those directories on the way past (only ones it generated, and it switches the
+desktop to the base theme first if you happen to be wearing one).
+
+### The second source: Omarchy's own themes
+
+The palettes are eleven answers. The box already has twenty-odd more, and
+there is no reason a single tile cannot wear one:
+
+```bash
+td-tint --theme osaka-jade      # this terminal, in Omarchy's Osaka Jade
+td-tint --themes                # what's installed
+```
+
+It is the same `colors.toml`, down the same tty, through the same OSC — the
+only difference is which list the name came from, which is why `--theme`
+carries its own name rather than leaving it positional.
+
+[Terminal Paint](https://github.com/parker-brown-family/omarchy-td-palette),
+the workspace picker, offers **only** this list: Omarchy's set is larger and
+already the vocabulary you chose your desktop from, and Terminal Delight is in
+it as one theme, so nothing is out of reach. The palettes stay a command-line
+identity — `td-tint cherry` — which is where a hand-made set of eleven earns
+its keep.
 
 ### The config surface is one file
 
@@ -271,12 +316,13 @@ the renderer, below the colour encoding.
 
 ### Why the variants are built, not shipped
 
-`omarchy-theme-set` only strips Lua from a theme carrying its own `.git`
-(`omarchy-theme-set:207`). A variant generated on your machine has none — so
-it keeps its `hyprland.lua`, and the rounding, blur and screen shader come
-with it. **Every variant is curved out of the box.** Only the per-window warp
-is still a separate step, because those shaders live in Hyprland's config
-rather than in any theme:
+Generating them on your machine keeps the repo small, but the real reason is
+what it buys under `--as-themes`: `omarchy-theme-set` only strips Lua from a
+theme carrying its own `.git` (`omarchy-theme-set:207`). A variant theme
+generated on your machine has none — so it keeps its `hyprland.lua`, and the
+rounding, blur and screen shader come with it. **A variant built as a theme is
+curved out of the box.** Only the per-window warp is still a separate step,
+because those shaders live in Hyprland's config rather than in any theme:
 
 ```bash
 ./install-curve.sh    # once, then log out and back in
@@ -292,7 +338,8 @@ rather than in any theme:
 
 This one is the middle layer, and the only one the other two both depend on:
 `install-variants.sh` is what puts `td-tint` on `PATH`, and `td-tint --state`
-is the oracle the palette widget renders. A variant key written in
+is the oracle the palette widget renders — both card lists, the tiles, and
+which list each tile's pick came from. A palette key written in
 `variants.toml` becomes a card in that widget — which is why the widget
 validates every key it reads rather than trusting this repo to be careful.
 
@@ -305,14 +352,14 @@ validates every key it reads rather than trusting this repo to be careful.
 | `crt-glass.frag` | the MONITOR pass — Terminal Delight's display stack for the whole desktop: px-true scanlines, the rolling tracking band, stepped flicker, glass glare, phosphor bloom, vignette, and a brightness/contrast/saturation/gamma grade. Every dial is a `const` in its MONITOR CONFIG block; `CURV = 0` because the per-window warp carries the curve |
 | `shaders/surface.frag`, `shaders/ext.frag` | the per-window warp |
 | `install-curve.sh` | the opt-in installer for what the drop takes away: the per-window shaders, plus a managed rounding/blur/shadow/screen-shader block in `~/.config/hypr/looknfeel.lua` |
-| `variants.toml` | the variant set: six keys each, the only file you edit |
-| `bin/build-variants` | derives a full theme from those six keys, and draws the tile |
-| `bin/td-tint` | tint one terminal — text and border — without touching the theme |
+| `variants.toml` | the palette set: six keys each, the only file you edit |
+| `bin/build-variants` | derives a palette from those six keys — or, under `--as-themes`, a whole theme and its gallery tile |
+| `bin/td-tint` | tint one terminal — text and border — from either source, without touching the theme |
 | `bin/td-monitor` | turn the monitor's knobs — rewrite the CONFIG block across the installed family, validate, recompile live |
 | `bin/td-mcp` | the paint surface as MCP tools for agents — see "Agents paint too" |
 | `test/run` | the hermetic test suite (stubs for hyprctl/omarchy-theme-*; no compositor needed) |
-| `install-variants.sh` | builds every variant into `~/.config/omarchy/themes/` |
-| `previews/` | the tiles, as the theme grid shows them |
+| `install-variants.sh` | builds every palette into `~/.local/share/terminal-delight/palettes/`, installs the tools, and retires the old variant *themes* |
+| `previews/` | the gallery tiles, as the theme grid shows them under `--as-themes` |
 
 Copying the directory into `~/.config/omarchy/themes/terminal-delight/`
 yourself keeps all of it — a theme you wrote stays yours — but the curve still

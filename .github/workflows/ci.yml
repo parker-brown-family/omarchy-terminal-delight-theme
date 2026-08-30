@@ -26,7 +26,7 @@ jobs:
       # ANIMATED on any of them at runtime.
       - name: frags compile in both states
         run: |
-          ./bin/build-variants --into /tmp/themes --reuse-previews
+          ./bin/build-variants --as-themes --into /tmp/themes --reuse-previews
           for f in crt-glass.frag /tmp/themes/*/crt-glass.frag; do
             glslangValidator "$f"
             sed 's/^#define ANIMATED 0/#define ANIMATED 1/' "$f" > /tmp/animated-probe.frag

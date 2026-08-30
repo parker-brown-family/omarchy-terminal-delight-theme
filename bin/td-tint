@@ -5,7 +5,10 @@
 #   td-tint cherry       this terminal is now the cherry one
 #   td-tint --clear      back to whatever the desktop theme says
 #   td-tint --list       what is installed
-#   td-tint --json       the same list as JSON (key/glyph/accent/partner)
+#   td-tint --json       the same list as JSON (key/label/glyph/accent/…)
+#   td-tint --themes     the Omarchy themes, which paint a tile just as well
+#   td-tint --themes-json  …the same list as JSON
+#   td-tint --theme osaka-jade      paint with an Omarchy theme instead
 #   td-tint --state      the ORACLE: one JSON document of everything — variants,
 #                        active workspace, focused monitor, and every terminal
 #                        tile with its class/pid/geometry/pick/saturation.
@@ -31,10 +34,22 @@
 # terminal's own window. Both are runtime-only — nothing is written to disk,
 # nothing to clean up, and the tint dies with the window.
 #
-# Needs the variants installed (./install-variants.sh).
+# TWO SOURCES paint the same way. A Terminal Delight PALETTE is a coat for
+# one terminal and lives outside Omarchy's theme directory
+# (~/.local/share/terminal-delight/palettes) — eleven of them in the theme
+# grid is eleven wrong answers to "what does this desktop look like", and the
+# grid should carry exactly one Terminal Delight. An Omarchy THEME is the
+# desktop's own vocabulary, and there is no reason a single tile cannot wear
+# one: it is the same colors.toml, down the same tty, through the same OSC.
+# So `--theme` is the whole difference, and every path below resolves a pick
+# through base_for() rather than building a directory name of its own.
+#
+# Needs the palettes installed (./install-variants.sh).
 set -euo pipefail
 
 THEMES="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/themes"
+SYSTEM_THEMES="${OMARCHY_PATH:-/usr/share/omarchy}/themes"
+PALETTES="${XDG_DATA_HOME:-$HOME/.local/share}/terminal-delight/palettes"
 PREFIX="terminal-delight-"
 CURRENT="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme/colors.toml"
 RUNDIR="${XDG_RUNTIME_DIR:-/tmp}/td-tint"
@@ -47,17 +62,84 @@ TERM_CLASSES='["foot","org.omarchy.agent","Alacritty","kitty","com.mitchellh.gho
 
 die() { echo "td-tint: $*" >&2; exit 1; }
 
-variants() {
-  local d
+# Where the palettes are. The new home is $PALETTES; boxes installed before
+# the move still carry them as `terminal-delight-<key>` themes, so that layout
+# is read too — but ONLY when the new home is empty. A half-migrated box that
+# read both would show every palette twice, and a picker that lists a thing
+# twice is a picker you stop trusting.
+palette_dirs() {
+  local d found=""
+  for d in "$PALETTES"/*/; do
+    [[ -f "$d/colors.toml" ]] || continue
+    printf '%s\n' "${d%/}"
+    found=1
+  done
+  [[ -n $found ]] && return 0
   for d in "$THEMES/$PREFIX"*/; do
-    [[ -d $d ]] || continue
-    basename "$d" | sed "s/^$PREFIX//"
+    [[ -f "$d/colors.toml" ]] || continue
+    printf '%s\n' "${d%/}"
   done
 }
 
+variants() {
+  local d nm
+  while IFS= read -r d; do
+    nm="${d##*/}"
+    printf '%s\n' "${nm#"$PREFIX"}"
+  done < <(palette_dirs)
+}
+
+# One palette key -> the directory holding it, new home first. Fails rather
+# than guessing, which is what lets every caller say "no such palette".
+palette_dir() {
+  [[ -f "$PALETTES/$1/colors.toml" ]] && { printf '%s\n' "$PALETTES/$1"; return 0; }
+  [[ -f "$THEMES/$PREFIX$1/colors.toml" ]] && { printf '%s\n' "$THEMES/$PREFIX$1"; return 0; }
+  return 1
+}
+
+# Every Omarchy theme this box can offer, user themes ahead of shipped ones so
+# a local override wins its name. A generated palette an older install left in
+# the theme directory is NOT a theme — it belongs to the other list, and
+# listing it in both is the same lie as listing it twice in one.
+omarchy_themes() {
+  local d nm
+  { for d in "$THEMES"/*/ "$SYSTEM_THEMES"/*/; do
+      [[ -f "$d/colors.toml" ]] || continue
+      nm="${d%/}"; nm="${nm##*/}"
+      [[ $nm == "$PREFIX"* ]] && continue
+      printf '%s\n' "$nm"
+    done; } | sort -u
+}
+
+omarchy_theme_dir() {
+  [[ -f "$THEMES/$1/colors.toml" ]] && { printf '%s\n' "$THEMES/$1"; return 0; }
+  [[ -f "$SYSTEM_THEMES/$1/colors.toml" ]] && { printf '%s\n' "$SYSTEM_THEMES/$1"; return 0; }
+  return 1
+}
+
+# THE resolver: a pick (key + source) to the palette file that paints it.
+# Repaint, --sync and --saturate all ask here, so a source can never be
+# honoured in three places and forgotten in the fourth.
+base_for() { # key source -> path to colors.toml
+  local d
+  if [[ ${2:-td} == omarchy ]]; then d="$(omarchy_theme_dir "$1")" || return 1
+  else d="$(palette_dir "$1")" || return 1; fi
+  printf '%s/colors.toml\n' "$d"
+}
+
 glyph_of() {
-  local g="$THEMES/$PREFIX$1/glyph"
+  local d g
+  d="$(palette_dir "$1")" || { printf '•'; return 0; }
+  g="$d/glyph"
   [[ -f $g ]] && tr -d '\n' <"$g" || printf '•'
+}
+
+# `osaka-jade` -> `Osaka Jade`. Omarchy's own picker names its themes this
+# way; a painter that renamed them would be a second vocabulary for the same
+# twenty-two things.
+theme_label() {
+  printf '%s' "$1" | awk '{ gsub(/-/, " ");
+    for (i = 1; i <= NF; i++) $i = toupper(substr($i, 1, 1)) substr($i, 2); print }'
 }
 
 # The tty to repaint: this shell's own terminal.
@@ -293,31 +375,104 @@ paint_tty() { # tty colorsfile cranked
   fi
 }
 
-# The installed variant set as JSON — shared by --json and --state, so the
-# card contract has exactly one producer.
-emit_variants_json() {
-  local first=1 v c a b
+# ONE card record, whichever list it came from: the picker draws palettes and
+# themes with the same delegate, so they had better arrive the same shape. A
+# palette brings a glyph; a theme brings none and is drawn as a swatch of its
+# own four colours instead.
+#
+# ONE resolver pass per entry, not one per colour. `--all` costs the same fork
+# as a single key and hands back the whole resolved palette — aliases, ANSI
+# fallbacks and derived shades included — so a theme that only defines color1..
+# color15 still yields an accent. Four separate queries would be four forks,
+# and the picker asks this for every palette AND every installed theme on the
+# box each time it opens.
+#
+# The three caller-supplied strings are the only ones that could carry a quote
+# into the document: colour VALUES arrive from a resolver whose charset gate
+# already excludes `"` and `\`, but a key is a directory name and a glyph is
+# file contents. They are escaped rather than trusted, because one stray quote
+# is the difference between a picker with an odd label and no picker at all.
+card_json() { # key label glyph colorsfile
+  omarchy-theme-color --file "$4" --all | awk -F'\t' -v k="$1" -v l="$2" -v g="$3" '
+    function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
+    { c[$1] = $2 }
+    END {
+      a  = c["accent"];      if (a  == "") a  = c["foreground"]
+      b  = c["bright_cyan"]; if (b  == "") b  = a
+      bg = c["background"];  if (bg == "") bg = "#000000"
+      fg = c["foreground"];  if (fg == "") fg = a
+      printf "{\"key\":\"%s\",\"label\":\"%s\",\"glyph\":\"%s\"," \
+             "\"accent\":\"%s\",\"partner\":\"%s\",\"bg\":\"%s\",\"fg\":\"%s\"}",
+             esc(k), esc(l), esc(g), a, b, bg, fg
+    }'
+}
+
+# key/label/glyph/colours-file, unit-separated, on stdin -> one JSON array.
+#
+# US (\x1f) and not a tab: `read` folds RUNS of whitespace delimiters into
+# one, so a theme's empty glyph field would silently shift the filename into
+# its place and every theme card would come out colourless. A non-whitespace
+# separator makes an empty field an empty field.
+#
+# The cards are resolved CONCURRENTLY. Each is an independent process and a
+# well-stocked box has thirty-odd of them across the two lists; run one after
+# another that was most of half a second, spent waiting for the next fork to
+# start, and it landed squarely in the picker's summon — the one moment a
+# painter is allowed to feel instant. They are unrelated to each other, so
+# there is nothing to serialise except the OUTPUT, which is the list's order:
+# each writes a numbered file and they are concatenated in that order.
+cards_json() {
+  local tmp i=0 f first=1 k l g c
+  tmp="$(mktemp -d)"
+  while IFS=$'\x1f' read -r k l g c; do
+    card_json "$k" "$l" "$g" "$c" >"$tmp/$(printf '%04d' "$i")" &
+    i=$((i + 1))
+  done
+  wait
   printf '['
-  for v in $(variants); do
-    c="$THEMES/$PREFIX$v/colors.toml"
-    a=$(omarchy-theme-color --file "$c" accent)
-    b=$(omarchy-theme-color --file "$c" bright_cyan "$a")
+  for f in "$tmp"/*; do
+    [[ -s $f ]] || continue
     [[ $first -eq 1 ]] || printf ','
-    printf '{"key":"%s","glyph":"%s","accent":"%s","partner":"%s"}' \
-      "$v" "$(glyph_of "$v")" "$a" "$b"
+    cat "$f"
     first=0
   done
   printf ']'
+  rm -rf "$tmp"
 }
 
-# The pick record: line 1 the variant ("-" = none), optional "sat=1" line.
+# The installed palette set as JSON — shared by --json and --state, so the
+# card contract has exactly one producer.
+emit_variants_json() {
+  local v d
+  while IFS= read -r v; do
+    d="$(palette_dir "$v")" || continue
+    printf '%s\x1f%s\x1f%s\x1f%s\n' "$v" "$v" "$(glyph_of "$v")" "$d/colors.toml"
+  done < <(variants) | cards_json
+}
+
+# …and the Omarchy theme set, the painter's second source. A theme brings no
+# glyph: what tells Osaka Jade from Tokyo Night IS the colour, so the picker
+# draws it as a swatch rather than inventing a face for it.
+emit_themes_json() {
+  local t d
+  while IFS= read -r t; do
+    d="$(omarchy_theme_dir "$t")" || continue
+    printf '%s\x1f%s\x1f%s\x1f%s\n' "$t" "$(theme_label "$t")" "" "$d/colors.toml"
+  done < <(omarchy_themes) | cards_json
+}
+
+# The pick record: line 1 the key ("-" = none), then optional "sat=1" and
+# "src=omarchy" lines. A record written before there were two sources has no
+# src line and reads as a palette, which is exactly what it was.
 rec_variant() { [[ -f $1 ]] && head -1 "$1" || true; }
 rec_sat()     { [[ -f $1 ]] && grep -qx "sat=1" "$1" && echo 1 || true; }
-rec_write()   { # path variant sat
+rec_src()     { [[ -f $1 ]] && grep -qx "src=omarchy" "$1" && echo omarchy || echo td; }
+rec_write()   { # path key sat [src]
   mkdir -p "$RUNDIR"
   {
     printf '%s\n' "$2"
     if [[ "$3" == 1 ]]; then printf 'sat=1\n'; fi
+    if [[ "${4:-td}" == omarchy ]]; then printf 'src=omarchy\n'; fi
   } >"$1"
 }
 
@@ -385,16 +540,23 @@ if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0 2>/dev/null || true; fi
 # the terminal this shell runs in.
 # --border-only: reframe the window without touching what's on the tube — the
 # repair verb for a window whose text tint is right but whose border was lost.
+# --theme NAME: paint from Omarchy's theme set instead of the palette set. It
+#   carries the name itself rather than leaving it positional, because the two
+#   namespaces can hold the same word and a picker must never have to guess
+#   which one the caller meant.
 #
-# A loop rather than two sequential ifs: the order between them stops being
+# A loop rather than three sequential ifs: the order between them stops being
 # the caller's problem, and a loop is what gives `--` somewhere to stop.
 TARGET_ADDR=""
 BORDER_ONLY=""
+SRC="td"
+THEME_KEY=""
 OPTS_DONE=""
 while [[ -z $OPTS_DONE && $# -gt 0 ]]; do
   case "$1" in
     --window)      TARGET_ADDR="${2:?td-tint: --window needs a Hyprland address}"; shift 2 ;;
     --border-only) BORDER_ONLY=1; shift ;;
+    --theme)       THEME_KEY="${2:?td-tint: --theme needs an Omarchy theme name}"; SRC="omarchy"; shift 2 ;;
     *)             OPTS_DONE=1 ;;
   esac
 done
@@ -418,6 +580,15 @@ case "${1:-}" in
   for v in $(variants); do printf '  %s  %s\n' "$(glyph_of "$v")" "$v"; done
   exit 0
   ;;
+--themes)
+  while IFS= read -r t; do printf '  %s\n' "$t"; done < <(omarchy_themes)
+  exit 0
+  ;;
+--themes-json)
+  emit_themes_json
+  printf '\n'
+  exit 0
+  ;;
 --sync)
   # The programmatic sweep: per-window border props survive theme reloads,
   # so any window painted under an OLD rule keeps reading wrong until
@@ -435,9 +606,9 @@ case "${1:-}" in
     rec="$RUNDIR/$addr"
     if [[ -f $rec ]]; then
       v="$(rec_variant "$rec")"
+      src="$(rec_src "$rec")"
       base=""
-      if [[ -n $v && $v != "-" && -f "$THEMES/$PREFIX$v/colors.toml" ]]; then
-        base="$THEMES/$PREFIX$v/colors.toml"
+      if [[ -n $v && $v != "-" ]] && base="$(base_for "$v" "$src")"; then
         a=$(omarchy-theme-color --file "$base" accent)
         b=$(omarchy-theme-color --file "$base" bright_cyan "$a")
         set_border "$addr" "rgba(${a#\#}ee) rgba(${b#\#}ee) 45deg" "rgba($(dim_hex "$a")cc)"
@@ -491,18 +662,21 @@ case "${1:-}" in
   if [[ -d $RUNDIR ]]; then
     recs=$(for f in "$RUNDIR"/0x*; do
       [[ -f $f ]] || continue
-      printf '%s\t%s\t%s\n' "$(basename "$f")" "$(rec_variant "$f")" "$(rec_sat "$f")"
+      printf '%s\t%s\t%s\t%s\n' "$(basename "$f")" "$(rec_variant "$f")" \
+        "$(rec_sat "$f")" "$(rec_src "$f")"
     done | jq -R -s '
       split("\n") | map(select(length > 0) | split("\t")
-        | {(.[0]): {v: .[1], s: (.[2] == "1")}}) | add // {}')
+        | {(.[0]): {v: .[1], s: (.[2] == "1"), src: (.[3] // "td")}}) | add // {}')
   fi
   variants_json="$(emit_variants_json)"
+  themes_json="$(emit_themes_json)"
   jq -n --argjson c "$clients" --argjson aw "$aws" --argjson m "$mons" \
-        --argjson r "$recs" --argjson v "$variants_json" --argjson tc "$TERM_CLASSES" \
-        --argjson fw "$awin" '
+        --argjson r "$recs" --argjson v "$variants_json" --argjson th "$themes_json" \
+        --argjson tc "$TERM_CLASSES" --argjson fw "$awin" '
     (($m | map(select(.focused)) | first) // ($m | first)) as $mon |
     {
       variants: $v,
+      themes: $th,
       active_workspace: $aw,
       focused: ($fw.address // null),
       monitor: {name: $mon.name, x: $mon.x, y: $mon.y},
@@ -515,6 +689,7 @@ case "${1:-}" in
            paintable: (.class != "terminal-delight"),
            at, size,
            variant: ((($r[.address] // {}).v // "-") | if . == "-" then null else . end),
+           source: (($r[.address] // {}).src // "td"),
            saturated: (($r[.address] // {}).s // false)}
       ]
     }'
@@ -536,12 +711,13 @@ case "${1:-}" in
   # was a single file SHARED by every address-less terminal — state bleed.
   rec="${addr:+$RUNDIR/$addr}"
   v="$(rec_variant "$rec")"
+  vsrc="$(rec_src "$rec")"
   cur="$(rec_sat "$rec")"
   new=1
   [[ "$mode" == off ]] && new=0
   [[ "$mode" == toggle && "$cur" == 1 ]] && new=0
   base="$CURRENT"
-  [[ -n $v && $v != "-" && -f "$THEMES/$PREFIX$v/colors.toml" ]] && base="$THEMES/$PREFIX$v/colors.toml"
+  if [[ -n $v && $v != "-" ]] && b="$(base_for "$v" "$vsrc")"; then base="$b"; fi
   [[ -f $base ]] || die "no palette source to saturate"
   if [[ $new == 1 ]]; then
     paint_tty "$tty" "$base" 1
@@ -550,7 +726,7 @@ case "${1:-}" in
     paint_tty "$tty" "$base" 0
     echo "saturation back to base"
   fi
-  if [[ -n ${addr:-} ]]; then rec_write "$rec" "${v:--}" "$new"; fi
+  if [[ -n ${addr:-} ]]; then rec_write "$rec" "${v:--}" "$new" "$vsrc"; fi
   exit 0
   ;;
 --clear)
@@ -575,6 +751,14 @@ esac
 
 variant="${1:-}"
 
+# --theme carries its own name, so nothing may follow it. Catching that here
+# turns `--theme nord cherry` into a sentence instead of a silent choice
+# between the two words.
+if [[ -n $THEME_KEY ]]; then
+  [[ -z $variant ]] || die "--theme takes the name itself: td-tint --theme '$THEME_KEY'"
+  variant="$THEME_KEY"
+fi
+
 # Without the terminator a leading dash is an option the parser did not
 # recognise, not a variant. Saying that beats "no variant '--foo'" — and the
 # message carries the fix, which is the only place a caller will look for it.
@@ -591,10 +775,13 @@ if [[ -z $variant ]]; then
   variant=${variant##* }
 fi
 
-theme="$THEMES/$PREFIX$variant"
-[[ -d $theme ]] || die "no variant '$variant'. Try: td-tint --list"
-colors="$theme/colors.toml"
-[[ -f $colors ]] || die "$colors is missing — re-run ./install-variants.sh"
+if [[ $SRC == omarchy ]]; then
+  colors="$(base_for "$variant" omarchy)" \
+    || die "no Omarchy theme '$variant'. Try: td-tint --themes"
+else
+  colors="$(base_for "$variant" td)" \
+    || die "no palette '$variant'. Try: td-tint --list"
+fi
 
 # The window first: its record decides whether the fresh coat goes on
 # already-cranked. SATURATE is a property of the TILE, not of the pick —
@@ -622,7 +809,11 @@ set_border "${addr:-}" "rgba(${accent#\#}ee) rgba(${partner#\#}ee) 45deg" "rgba(
 # remember the pick, so a later repair restores instead of guessing —
 # carrying SATURATE across it. `--saturate off` is the way to pour it back.
 if [[ -n ${addr:-} ]]; then
-  rec_write "$RUNDIR/$addr" "$variant" "${prior_sat:-0}"
+  rec_write "$RUNDIR/$addr" "$variant" "${prior_sat:-0}" "$SRC"
 fi
 
-printf '%s  this terminal is %s\n' "$(glyph_of "$variant")" "$variant"
+if [[ $SRC == omarchy ]]; then
+  printf '🎨  this terminal wears %s\n' "$(theme_label "$variant")"
+else
+  printf '%s  this terminal is %s\n' "$(glyph_of "$variant")" "$variant"
+fi

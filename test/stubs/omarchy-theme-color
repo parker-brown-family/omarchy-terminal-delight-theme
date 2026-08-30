@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
-# Test double with the real contract: --file F KEY [FALLBACK] → "#RRGGBB".
+# Test double with the real contract:
+#   --file F KEY [FALLBACK]  → "#RRGGBB"
+#   --file F --all           → key<TAB>value for every colour in the file
 f=""
+all=""
 args=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --file) f="$2"; shift 2 ;;
+    --all)  all=1; shift ;;
     *) args+=("$1"); shift ;;
   esac
 done
+if [[ -n $all ]]; then
+  sed -nE 's/^([a-z_]+)[[:space:]]*=[[:space:]]*"(#[0-9A-Fa-f]{6})".*/\1\t\2/p' "$f" 2>/dev/null
+  exit 0
+fi
 key="${args[0]:?key required}"
 fb="${args[1]:-}"
 v=$(grep -E "^${key}[[:space:]]*=" "$f" 2>/dev/null | head -1 | sed -E 's/.*"(#[0-9A-Fa-f]{6})".*/\1/')
