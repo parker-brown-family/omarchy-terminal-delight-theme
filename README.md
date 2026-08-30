@@ -10,18 +10,22 @@ every window, not just one app's.
 ![preview](preview.png)
 
 **Paint every terminal its own identity.** The 🎨 workspace picker floats a
-card over each tile; one click paints it — palette, border, glare and all —
-and the SATURATE crank makes the text glow like the terminal that inspired it:
+card over each tile holding every Omarchy theme on the machine; one click
+paints that tile — palette, border and all — and two switches beside it crank
+the text to a phosphor glow or take the tile's tube away:
 
-![the paint overlay — a picker card over every terminal tile](docs/gallery/paint-overlay.png)
+![the paint overlay — a card of Omarchy themes over every terminal tile](docs/gallery/paint-overlay.png)
 
-![five painted tiles — retro, tide, army, wood, and a saturated nuclear](docs/gallery/painted-wall.png)
+![three tiles, three themes, each behind its own curved glass](docs/gallery/painted-wall.png)
 
 That picker is a separate, optional install —
 [**Terminal Paint**](https://github.com/parker-brown-family/omarchy-td-palette),
-a bar widget on the Omarchy plugin marketplace. This repo is what it paints
-*with*: the variant set, and the `td-tint` engine underneath it. Everything
-below works from the command line without it.
+a bar widget on the Omarchy plugin marketplace. It paints with the *desktop's*
+vocabulary rather than ours, because Omarchy's theme set is larger and is
+already the one you chose your desktop from. This repo is the engine
+underneath — `td-tint` — plus the eleven hand-made palettes it can also wear
+from a prompt. Everything below works from the command line without the
+picker.
 
 ```bash
 omarchy plugin add https://github.com/parker-brown-family/omarchy-td-palette.git --enable
