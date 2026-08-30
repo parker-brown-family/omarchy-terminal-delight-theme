@@ -8,6 +8,8 @@ case "$*" in
   "activeworkspace -j" | "-j activeworkspace") cat "${TD_TEST_FIXTURES:?}/activeworkspace.json" ;;
   "monitors -j" | "-j monitors")             cat "${TD_TEST_FIXTURES:?}/monitors.json" ;;
   "activewindow -j" | "-j activewindow")     cat "${TD_TEST_FIXTURES:?}/activewindow.json" ;;
+  "getoption decoration:rounding")           printf 'int: %s\nset: true\n' "${TD_TEST_ROUNDING:-14}" ;;
+  getoption*)                                echo "int: 0" ;;
   dispatch*)                                 : ;;
   eval*)                                     echo ok ;;
   *)                                         echo "{}" ;;
