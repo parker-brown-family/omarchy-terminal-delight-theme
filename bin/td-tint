@@ -167,11 +167,19 @@ crt_rounding() {
   ((v > 0)) && printf '%s\n' "$v" || printf '%s\n' "$CRT_ROUNDING_FALLBACK"
 }
 
-set_rounding() { # addr value
+# The single place that speaks Hyprland's Lua dispatch API. `value` arrives
+# already in Lua form — quoted for a string prop, bare for a number — because
+# that is the only way the two differ, and a flag to decide it would be more
+# machinery than the difference is worth.
+win_prop() { # addr prop lua-value
   [[ -n $1 ]] || return 0
   hyprctl dispatch \
-    "hl.dsp.window.set_prop({ prop = \"rounding\", value = $2, window = \"address:$1\" })" \
+    "hl.dsp.window.set_prop({ prop = \"$2\", value = $3, window = \"address:$1\" })" \
     >/dev/null 2>&1 || true
+}
+
+set_rounding() { # addr value
+  win_prop "$1" rounding "$2"
 }
 
 # The name Omarchy is wearing right now, read at call time. The picker draws a
@@ -559,15 +567,20 @@ theme_border_args() {
 # gradient; unfocused keeps the variant's hue as a quiet solid. Setting both
 # states to the same bright value — the old behaviour — made a wall of tinted
 # terminals read identity but never focus.
-set_border() {
-  local addr="$1" active="$2" inactive="$3"
-  [[ -n $addr ]] || return 0
-  hyprctl dispatch \
-    "hl.dsp.window.set_prop({ prop = \"active_border_color\", value = \"$active\", window = \"address:$addr\" })" \
-    >/dev/null 2>&1 || true
-  hyprctl dispatch \
-    "hl.dsp.window.set_prop({ prop = \"inactive_border_color\", value = \"$inactive\", window = \"address:$addr\" })" \
-    >/dev/null 2>&1 || true
+set_border() { # addr active inactive
+  win_prop "$1" active_border_color "\"$2\""
+  win_prop "$1" inactive_border_color "\"$3\""
+}
+
+# The border a PICK wears: the loud 45° gradient while focused, the same hue
+# dimmed while not. Two call sites carried their own copy of this arithmetic,
+# which is exactly how a repaint and a sweep come to draw different borders
+# for the same pick and nobody notices for a week.
+pick_border_args() { # colours-file -> active\ninactive
+  local a b
+  a=$(omarchy-theme-color --file "$1" accent)
+  b=$(omarchy-theme-color --file "$1" bright_cyan "$a")
+  printf '%s\n%s\n' "rgba(${a#\#}ee) rgba(${b#\#}ee) 45deg" "rgba($(dim_hex "$a")cc)"
 }
 
 # Somebody ELSE'S terminal: --window hands us the Hyprland address, the client
@@ -673,9 +686,8 @@ case "${1:-}" in
       src="$(rec_src "$rec")"
       base=""
       if [[ -n $v && $v != "-" ]] && base="$(base_for "$v" "$src")"; then
-        a=$(omarchy-theme-color --file "$base" accent)
-        b=$(omarchy-theme-color --file "$base" bright_cyan "$a")
-        set_border "$addr" "rgba(${a#\#}ee) rgba(${b#\#}ee) 45deg" "rgba($(dim_hex "$a")cc)"
+        mapfile -t pb < <(pick_border_args "$base")
+        set_border "$addr" "${pb[0]}" "${pb[1]}"
       elif [[ $v == "-" ]]; then
         base="$CURRENT"
         if [[ ${#THEME_TB[@]} -eq 2 ]]; then set_border "$addr" "${THEME_TB[0]}" "${THEME_TB[1]}"; fi
@@ -928,9 +940,8 @@ if [[ -z $BORDER_ONLY ]]; then
 fi
 
 # 2. the frame: this window's own border, so it reads while unfocused too
-accent=$(omarchy-theme-color --file "$colors" accent)
-partner=$(omarchy-theme-color --file "$colors" bright_cyan "$accent")
-set_border "${addr:-}" "rgba(${accent#\#}ee) rgba(${partner#\#}ee) 45deg" "rgba($(dim_hex "$accent")cc)"
+mapfile -t pb < <(pick_border_args "$colors")
+set_border "${addr:-}" "${pb[0]}" "${pb[1]}"
 
 # remember the pick, so a later repair restores instead of guessing —
 # carrying SATURATE across it. `--saturate off` is the way to pour it back.

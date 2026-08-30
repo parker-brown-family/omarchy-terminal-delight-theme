@@ -141,6 +141,27 @@ The warp compiles only into the rounded-window shader variant, so it keys off
 `rounding > 0`. Windows bow. Layers — the bar, the wallpaper, menus — and
 fullscreen windows stay flat.
 
+**That is also the switch.** Because the whole block — warp *and* glare — is
+gated on the rounded variant, a window's rounding radius is its CRT power
+switch, and `td-tint` exposes it:
+
+```bash
+td-tint --crt off                       # this terminal, flat glass
+td-tint --window 0x… --crt toggle       # or somebody else's
+```
+
+It is worth being clear about why it is rounding and not something more
+obvious. Hyprland reads window shaders **once, at startup**, so the shader
+itself cannot be swapped while you are looking at it. The screen shader *can*
+be swapped live, but doing so wedges `wlr-screencopy` for hours — screenshots
+hang, and `hyprctl reload` does not clear it. Rounding is the one property in
+this whole stack that the compositor honours live, per window, and that the
+shader already keys off. So it is the lever, and there is no second one.
+
+An unswitched window inherits the desktop's rounding, and that is a state of
+its own — distinct from "switched on". `set_prop` has no working unset, so
+`td-tint --sync` re-pins only tiles that asked, and leaves the rest inheriting.
+
 Three things worth knowing before you install it:
 
 - **It is compositor-wide, not theme-scoped.** Those two shaders sit in your
@@ -238,6 +259,18 @@ it as one theme, so nothing is out of reach. The palettes stay a command-line
 identity — `td-tint cherry` — which is where a hand-made set of eleven earns
 its keep.
 
+Nothing is cached. `td-tint --themes` and `td-tint --state` glob the theme
+directories at the moment you call them, so a theme installed a minute ago is
+in the list and one uninstalled a minute ago is not:
+
+```bash
+$ td-tint --themes | wc -l
+23
+$ mkdir -p ~/.config/omarchy/themes/borrowed && cp …/colors.toml $_
+$ td-tint --themes | wc -l
+24
+```
+
 ### The config surface is one file
 
 [`variants.toml`](variants.toml) is the whole thing. Six keys per variant —
@@ -273,9 +306,11 @@ variants come with a second, smaller tool that changes **one terminal and
 nothing else**:
 
 ```bash
-td-tint            # pick from the set
-td-tint cherry     # this terminal is now the cherry one
-td-tint --clear    # back to whatever the desktop theme says
+td-tint                        # pick from the palette set
+td-tint cherry                 # this terminal is now the cherry one
+td-tint --theme osaka-jade     # …or one of Omarchy's own themes
+td-tint --crt off              # flat glass, this terminal only
+td-tint --clear                # back to whatever the desktop theme says
 ```
 
 It writes that variant's OSC palette down the terminal's own tty, and sets
@@ -313,6 +348,17 @@ running a truecolor agent and the status bar takes the crank while the
 agent's prose does not. For per-pane grading that reaches *every* pixel,
 that is what adopting the pane into Terminal Delight is for — TD grades at
 the renderer, below the colour encoding.
+
+### The whole workspace at once
+
+[Terminal Paint](https://github.com/parker-brown-family/omarchy-td-palette) is
+the picker: one card over every terminal tile, holding every theme this machine
+has, with SATURATE and CRT switches per tile and SATURATE ALL / CRT ALL on the
+rail. It renders `td-tint --state` and shells back to `td-tint` to act — it
+authors no colours and installs no shaders. On a box where `install-curve.sh`
+has not run, its CRT switches are absent rather than inert, because `--state`
+reports `crt.available` and a control that cannot do anything is worse than no
+control.
 
 ### Why the variants are built, not shipped
 
