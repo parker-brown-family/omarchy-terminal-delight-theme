@@ -137,6 +137,8 @@ tracking band earns its GPU bill — decide per moment, not per install.
 
 ## What the warp does, and what it costs
 
+![a terminal pane behind the barrel warp, with the glare hotspot top-left](docs/tube.png)
+
 The warp compiles only into the rounded-window shader variant, so it keys off
 `rounding > 0`. Windows bow. Layers — the bar, the wallpaper, menus — and
 fullscreen windows stay flat.
@@ -371,8 +373,12 @@ curved out of the box.** Only the per-window warp is still a separate step,
 because those shaders live in Hyprland's config rather than in any theme:
 
 ```bash
-./install-curve.sh    # once, then log out and back in
+./install-curve.sh    # once; it reloads Hyprland for you
 ```
+
+Hyprland loads window shaders when it reads its config, so `hyprctl reload`
+arms them — a relogin is not needed, whatever the docs imply. Verified by
+pixel on 0.56: install, reload, and the windows bow on the next frame.
 
 ## The three repos
 

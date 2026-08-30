@@ -18,7 +18,10 @@
 # Step 2 is skipped when the theme is a hand-copied one whose own hyprland.lua
 # survived, because then those settings are already being applied.
 #
-# Hyprland reads its shaders once at startup, so step 1 needs a relogin.
+# Hyprland loads the shaders when it reads its config, so step 1 needs a
+# `hyprctl reload` — NOT a relogin, which is what this said for a long time
+# and what the Hyprland docs imply. Verified by pixel on 0.56: install the
+# shaders, `hyprctl reload`, and the windows bow immediately.
 #
 # Reversible:  ./install-curve.sh --uninstall
 set -euo pipefail
@@ -64,7 +67,11 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   fi
   $removed || echo "nothing to remove."
   echo
-  echo "Log out and back in — Hyprland only reads its shaders at startup."
+  if command -v hyprctl >/dev/null && hyprctl reload >/dev/null 2>&1; then
+    echo "Reloaded Hyprland — the warp is gone."
+  else
+    echo "Run 'hyprctl reload' (or log back in) to drop the warp."
+  fi
   exit 0
 fi
 
@@ -150,5 +157,9 @@ LUA
 fi
 
 echo
-echo "Log out and back in — Hyprland only reads its shaders at startup."
+if command -v hyprctl >/dev/null && hyprctl reload >/dev/null 2>&1; then
+  echo "Reloaded Hyprland — the windows are bowed already."
+else
+  echo "Run 'hyprctl reload' (or log back in) to arm the warp."
+fi
 echo "Undo with: ./install-curve.sh --uninstall"
