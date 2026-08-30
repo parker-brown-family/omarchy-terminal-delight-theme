@@ -332,6 +332,43 @@ assert_eq "list_themes reaches the second source" "$(line 10 | jq -r '.result.co
 assert_has "the crt tool switches the tube through the CLI" "$(line 11 | jq -r '.result.content[0].text')" "flat glass"
 assert_eq "…and it lands in the record" "$(rec_crt "$XDG_RUNTIME_DIR/td-tint/0xbbb")" "off"
 
+echo "— the façade covers the engine (ARCHITECTURE.md's one rule)"
+# "Every capability is a CLI verb on a tested engine; everything else is a thin
+# façade that delegates to it." That rule is only worth having if something
+# checks it — and it had already been broken once, silently: the MCP server sat
+# a whole release behind `--theme` and `--crt`, so an agent could not reach half
+# the paint surface and nothing said so.
+#
+# Both directions matter. A new engine verb with no tool is the regression that
+# happened; a tool naming a verb that no longer exists is the one that happens
+# next, when a verb gets renamed.
+declare -A FACADE=(
+  [list]=list_variants        [json]=list_variants
+  [themes]=list_themes        [themes-json]=list_themes
+  [state]=state               [sync]=sync
+  [crt]=crt                   [saturate]=saturate
+  [clear]=clear
+)
+# Not capabilities: `--` ends option parsing, `--window`/`--border-only`/
+# `--theme` are modifiers on other verbs and are covered through paint,
+# border_only and paint_theme.
+mcp_tools="$(grep -oP '^    "\K[a-z_]+(?=": \{)' "$root/bin/td-mcp" | tr '\n' ' ')"
+uncovered=""
+for v in $(grep -oP '^--\K[a-z-]*(?=\)$)' "$root/bin/td-tint"); do
+  [[ -n $v ]] || continue
+  [[ -n "${FACADE[$v]:-}" ]] || { uncovered="$uncovered $v"; continue; }
+  grep -qw "${FACADE[$v]}" <<<"$mcp_tools" || uncovered="$uncovered $v(->${FACADE[$v]} missing)"
+done
+assert_eq "every engine verb is reachable from the MCP façade" "$uncovered" ""
+
+dangling=""
+for t in "${FACADE[@]}"; do
+  grep -qw "$t" <<<"$mcp_tools" || dangling="$dangling $t"
+done
+assert_eq "…and every tool this map names still exists" "$dangling" ""
+assert_has "the two verbs the façade once missed are named in it" \
+  "${FACADE[crt]}/${FACADE[themes]}" "crt/list_themes"
+
 echo "— option terminator (a variant key that looks like a flag)"
 # Deliberately last: this installs a third variant, and the counts asserted
 # above are part of the contract those blocks test.
