@@ -305,12 +305,16 @@ mcp_out="$(printf '%s\n' \
   '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"list_tiles","arguments":{}}}' \
   '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"nope","arguments":{}}}' \
   '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"state","arguments":{}}}' \
+  '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"list_themes","arguments":{}}}' \
+  '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"crt","arguments":{"address":"0xbbb","mode":"off"}}}' \
   | python3 "$root/bin/td-mcp")"
 line() { sed -n "${1}p" <<<"$mcp_out"; }
 assert_eq "initialize answers the protocol version" "$(line 1 | jq -r .result.protocolVersion)" "2024-11-05"
 assert_eq "server names itself" "$(line 1 | jq -r .result.serverInfo.name)" "td-paint"
 assert_eq "ping pongs (empty result, no error)" "$(line 2 | jq -c .result)" "{}"
-assert_eq "tools/list advertises the full surface" "$(line 3 | jq '.result.tools | length >= 10')" "true"
+assert_eq "tools/list advertises the full surface" "$(line 3 | jq '.result.tools | length >= 13')" "true"
+assert_has "…including the second source" "$(line 3 | jq -r '.result.tools[].name' | tr '\n' ' ')" "paint_theme"
+assert_has "…and the tube" "$(line 3 | jq -r '.result.tools[].name' | tr '\n' ' ')" "crt"
 assert_has "tools/list includes paint" "$(line 3 | jq -r '.result.tools[].name' | tr '\n' ' ')" "paint"
 assert_eq "every tool ships a description and schema" "$(line 3 | jq '(.result.tools | length) as $n | [.result.tools[] | select((.description | length) > 0 and .inputSchema.type == "object")] | length == $n')" "true"
 assert_eq "list_variants returns parseable variants" "$(line 4 | jq -r '.result.content[0].text' | jq 'length')" "2"
@@ -324,6 +328,9 @@ assert_eq "list_tiles reports the '-' pin as no variant" "$(jq -r '.[] | select(
 assert_eq "list_tiles flags terminal-delight windows" "$(jq -r '.[] | select(.address=="0xddd") | .terminal_delight' <<<"$tiles")" "true"
 assert_eq "unknown tool is a JSON-RPC error" "$(line 8 | jq -r '.error.code')" "-32602"
 assert_eq "the state tool relays the oracle verbatim" "$(line 9 | jq -r '.result.content[0].text' | jq -r '.focused')" "0xbbb"
+assert_eq "list_themes reaches the second source" "$(line 10 | jq -r '.result.content[0].text' | jq 'length')" "4"
+assert_has "the crt tool switches the tube through the CLI" "$(line 11 | jq -r '.result.content[0].text')" "flat glass"
+assert_eq "…and it lands in the record" "$(rec_crt "$XDG_RUNTIME_DIR/td-tint/0xbbb")" "off"
 
 echo "— option terminator (a variant key that looks like a flag)"
 # Deliberately last: this installs a third variant, and the counts asserted

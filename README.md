@@ -317,7 +317,7 @@ It writes that variant's OSC palette down the terminal's own tty, and sets
 the border colour as a property on that terminal's own window. Both are
 runtime-only: nothing is written to disk, there is no state to clean up, and
 the tint dies with the window. The desktop theme is never touched, so you can
-run nine differently-coloured terminals side by side on one theme — text,
+run a dozen differently-coloured terminals side by side on one theme — text,
 ANSI ramp and window border all matching.
 
 The window it recolours is found by walking up `/proc` from the calling shell
@@ -397,10 +397,10 @@ validates every key it reads rather than trusting this repo to be careful.
 | `backgrounds/` | Void Tube |
 | `crt-glass.frag` | the MONITOR pass — Terminal Delight's display stack for the whole desktop: px-true scanlines, the rolling tracking band, stepped flicker, glass glare, phosphor bloom, vignette, and a brightness/contrast/saturation/gamma grade. Every dial is a `const` in its MONITOR CONFIG block; `CURV = 0` because the per-window warp carries the curve |
 | `shaders/surface.frag`, `shaders/ext.frag` | the per-window warp |
-| `install-curve.sh` | the opt-in installer for what the drop takes away: the per-window shaders, plus a managed rounding/blur/shadow/screen-shader block in `~/.config/hypr/looknfeel.lua` |
+| `install-curve.sh` | the opt-in installer for what the drop takes away: the per-window shaders, plus a managed rounding/blur/shadow/screen-shader block in `~/.config/hypr/looknfeel.lua`. It is also what arms the per-tile CRT switch, because that switch is the rounded-variant gate |
 | `variants.toml` | the palette set: six keys each, the only file you edit |
 | `bin/build-variants` | derives a palette from those six keys — or, under `--as-themes`, a whole theme and its gallery tile |
-| `bin/td-tint` | tint one terminal — text and border — from either source, without touching the theme |
+| `bin/td-tint` | tint one terminal — text, border and tube — from either source, without touching the theme |
 | `bin/td-monitor` | turn the monitor's knobs — rewrite the CONFIG block across the installed family, validate, recompile live |
 | `bin/td-mcp` | the paint surface as MCP tools for agents — see "Agents paint too" |
 | `test/run` | the hermetic test suite (stubs for hyprctl/omarchy-theme-*; no compositor needed) |
@@ -422,12 +422,16 @@ register it once:
 claude mcp add td-paint -- ~/.local/bin/td-mcp
 ```
 
-Tools: `list_variants`, `list_tiles` (every terminal window with its recorded
-variant + saturation), `paint`, `border_only`, `saturate`, `clear`, `sync`,
-`paint_panes` (Terminal Delight's per-pane picker over its control socket),
-`monitor_knobs`, `monitor_set`. Deliberately thin: every tool delegates to
-the same CLI a human runs, so there is one behaviour and the MCP layer can
-never drift from it.
+Tools: `list_variants` and `list_themes` (both card lists, read live),
+`list_tiles` and `state` (every terminal window with its pick, source,
+saturation and tube), `paint` and `paint_theme`, `crt`, `saturate`,
+`border_only`, `clear`, `sync`, `paint_panes` (Terminal Delight's per-pane
+picker over its control socket), `monitor_knobs`, `monitor_set`.
+
+Deliberately thin: every tool delegates to the same CLI a human runs, so there
+is one behaviour and the MCP layer cannot drift from it. That is a rule with
+teeth — the façade had fallen a release behind the engine, and an agent that
+cannot reach `--theme` or `--crt` is a façade with holes in it.
 
 ## Tests
 

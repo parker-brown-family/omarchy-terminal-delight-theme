@@ -18,16 +18,19 @@ that sentence.
 ```
  data      variants.toml · colors.toml · backgrounds/ · previews/
    │
- generator bin/build-variants            variants.toml → full Omarchy themes
-   │                                     (palette, hyprland.lua, retinted frag)
- render    crt-glass.frag (monitor pass) · shaders/*.frag (per-window warp+glare)
-   │
- engine    bin/td-tint                   paint · saturate · clear · sync ·
-   │                                     records · THE ORACLE (--state)
+ generator bin/build-variants            variants.toml → palettes; under
+   │                                     --as-themes, whole Omarchy themes
+   │                                     (hyprland.lua + retinted frag)
+ render    crt-glass.frag (monitor pass) · shaders/*.frag (per-window warp+glare
+   │                                     — and the rounded-variant gate that
+   │                                     makes the warp switchable per window)
+ engine    bin/td-tint                   paint · theme · saturate · crt ·
+   │                                     clear · sync · records ·
+   │                                     THE ORACLE (--state)
    │       bin/td-monitor               the monitor pass's knob surface
    │
  façades   bin/td-mcp                   the engine as MCP tools (stdlib python)
-   │       incubator/td-palette (lab)   the engine as a bar widget + overlay
+   │       omarchy-td-palette (own repo) the engine as a bar widget + overlay
    │       hooks/theme-set.d/…          the engine on every theme switch
    │
  install   install-variants.sh · install-curve.sh

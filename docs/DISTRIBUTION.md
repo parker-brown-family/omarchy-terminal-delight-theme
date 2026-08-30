@@ -16,7 +16,7 @@ ecosystem that is actually growing.
 ## Channel 1 — this repo (the theme + engine): shipping NOW
 
 Users install the theme straight from the public repo (see README), which
-brings the 11 variants, the curve + per-tile glare, the monitor pass,
+brings the 11 palettes, the curve + per-tile glare, the monitor pass,
 `td-tint`/`td-monitor`/`td-mcp` and the self-healing hook. Released as
 **v0.1.0** with a gallery. Optional reach: a PR to
 [awesome-omarchy](https://github.com/aorumbayev/awesome-omarchy).
