@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# The screenshot omarchy.org/themes asks for, built to its brief.
+#
+# That page is a grid of images and nothing else — the picture IS the pitch —
+# so the site repo states the terms plainly: a real session with a terminal AND
+# an editor, the theme's own wallpaper, no cursor, nothing personal, 16:9, and
+# under about 100 KB as WebP at 1200x675. This script produces exactly that,
+# reproducibly, on a workspace built for the purpose:
+#
+#   bin/shoot-theme            -> docs/gallery/terminal-delight.webp (+ .png)
+#   bin/shoot-theme --keep     leave the staged workspace up to look at
+#
+# It returns you to the workspace you started on, always, and it restores the
+# cursor timeout it borrowed.
+#
+# Why staged and not the live desktop: a photograph of whatever happens to be
+# open is a photograph of someone's mail. This one holds two windows this
+# script opened, showing this repo's own files.
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(dirname "$here")"
+OUT="$root/docs/gallery"
+WS=8                       # far from anything in daily use
+KEEP=""
+for a in "$@"; do [[ $a == --keep ]] && KEEP=1; done
+
+need() { command -v "$1" >/dev/null || { echo "need $1" >&2; exit 1; }; }
+for c in hyprctl grim magick jq foot nvim; do need "$c"; done
+
+HOME_WS="$(hyprctl activeworkspace -j | jq -r '.id')"
+# `hyprctl getoption` reports an int; 0 means "never hide", which is the
+# default and the reason every shot so far had a pointer in it.
+OLD_TIMEOUT="$(hyprctl getoption cursor:inactive_timeout 2>/dev/null | awk '/^int:/ { print $2; exit }')"
+OLD_TIMEOUT="${OLD_TIMEOUT:-0}"
+
+cleanup() {
+  hyprctl eval "hl.config({ cursor = { inactive_timeout = $OLD_TIMEOUT } })" >/dev/null 2>&1
+  if [[ -z $KEEP ]]; then
+    while IFS= read -r a; do
+      [[ -n $a ]] || continue
+      hyprctl dispatch "hl.dsp.window.close({ window = \"address:$a\" })" >/dev/null 2>&1
+    done < <(hyprctl clients -j | jq -r --argjson w "$WS" '.[] | select(.workspace.id == $w) | .address')
+  fi
+  # Hyprland 0.56: hl.dsp.workspace is a table of workspace OPERATIONS (move,
+  # rename, change_id) with no "go to" — going to one is a focus.
+  hyprctl dispatch "hl.dsp.focus({ workspace = $HOME_WS })" >/dev/null 2>&1
+}
+trap cleanup EXIT
+
+mkdir -p "$OUT"
+hyprctl dispatch "hl.dsp.focus({ workspace = $WS })" >/dev/null 2>&1
+sleep 0.4
+
+# A 3840x2160 capture downscaled to 1200 is a 3.2x reduction, so anything at
+# the font size you actually work at comes out as grey mush. FONT is what makes
+# the shot legible at the size the page shows it, and it is the single thing
+# the first attempt got wrong.
+FONT="JetBrainsMono Nerd Font:size=17"
+
+# The right-hand pane: what the theme is, the palette it is made of, and the
+# commands that install it. No hostname and no local paths — the brief says
+# nothing personal, and a prompt is the easiest place to leak some.
+pane="$(mktemp)"
+cat >"$pane" <<'SH'
+PS1='\[\033[32m\]terminal-delight\[\033[0m\] \[\033[36m\]main\[\033[0m\] $ '
+clear
+# Three blank lines, then the title. The glare hotspot sits at the top-left of
+# every window; without headroom it washes out the one line that says what the
+# theme is called.
+printf '\n\n\n  \033[1;32mTerminal Delight\033[0m\n'
+printf '  \033[90mphosphor on void, and every window bowed like the face of a tube\033[0m\n\n'
+printf '  '; for i in 1 2 3 4 5 6 7; do printf '\033[4%dm      \033[0m' "$i"; done; printf '\n'
+printf '  '; for i in 1 2 3 4 5 6 7; do printf '\033[9%dm██████\033[0m' "$i"; done; printf '\n\n'
+printf '  \033[36m❯\033[0m omarchy theme install \033[90m…/omarchy-terminal-delight-theme\033[0m\n'
+printf '  \033[36m❯\033[0m ./install-curve.sh\n\n'
+printf '  \033[90m── eleven palettes, one terminal at a time ──\033[0m\n\n'
+td-tint --list 2>/dev/null | sed 's/^/  /'
+printf '\n  \033[36m❯\033[0m td-tint cherry\n'
+printf '  \033[36m❯\033[0m td-tint --theme osaka-jade  \033[90m# or any Omarchy theme\033[0m\n'
+printf '  \033[36m❯\033[0m td-tint --crt off           \033[90m# this tile, flat glass\033[0m\n\n'
+exec sleep 900
+SH
+
+# Two windows, not three. The brief asks for a terminal and an editor; three
+# cramped panes at this reduction are less of a pitch than two legible ones,
+# and the thing being sold here — text bowed across curved glass — needs room
+# to be seen at all.
+# `nocursorline`, because at a 3.2x reduction a full-width cursorline is not a
+# cursor — it is a grey bar across the shot that reads as a rendering fault.
+#
+# Open ON the variant blocks, not the header. The prose at the top of that
+# file runs wider than this window and clips mid-word, which reads as broken
+# text rather than as a real editor. Four lines of headroom above the first
+# block is deliberate: the per-window glare lands hardest on the top of a
+# window, and it should land on something that can afford it.
+first_block="$(grep -n '^\[' "$root/variants.toml" | head -1 | cut -d: -f1)"
+setsid foot --font "$FONT" --title "td-shot-editor" \
+  nvim -c "set nonumber laststatus=2 nocursorline nocursorcolumn" \
+       -c "normal! $((first_block > 5 ? first_block - 4 : 1))Gzt" \
+       "$root/variants.toml" >/dev/null 2>&1 &
+sleep 2.6
+setsid foot --font "$FONT" --title "td-shot-pane" bash --rcfile "$pane" -i >/dev/null 2>&1 &
+sleep 2.8
+
+# Focus the editor so the bright active border frames the thing the brief
+# asked for, rather than whichever window happened to open last.
+ed="$(hyprctl clients -j | jq -r '.[] | select(.title == "td-shot-editor") | .address' | head -1)"
+[[ -n $ed ]] && hyprctl dispatch "hl.dsp.focus({ window = \"address:$ed\" })" >/dev/null 2>&1
+sleep 0.6
+
+# Hide the pointer, then keep still. grim captures whatever the compositor
+# composites, and the compositor composites a cursor until it is told the
+# pointer has gone idle.
+hyprctl eval 'hl.config({ cursor = { inactive_timeout = 1 } })' >/dev/null 2>&1
+sleep 2.2
+
+cap="$(mktemp --suffix=.png)"
+grim "$cap"
+
+# 1. The site asset. This is the site repo's own recipe, verbatim. A 3840x2160
+#    capture is exactly 16:9, so `1200>` lands on 1200x675 without cropping.
+magick "$cap" -strip -resize '1200>' -quality 80 "$OUT/terminal-delight.webp"
+
+# 2. Omarchy's own theme-grid tile, at the size the shipped themes use. Indexed
+#    to 256 colours because a truecolor PNG of this is 1.4 MB against a stock
+#    theme's 350 KB — and the shader's grain is what makes it compress badly,
+#    not anything anyone will miss. Checked by eye: no banding in the gradient.
+magick "$cap" -strip -resize 1800x -colors 256 \
+  -define png:compression-level=9 "$root/preview.png"
+
+rm -f "$cap" "$pane"
+
+for f in "$OUT/terminal-delight.webp" "$root/preview.png"; do
+  printf '  %-52s %s  %d KB\n' "${f#"$root/"}" \
+    "$(magick identify -format '%wx%h' "$f")" "$(($(stat -c %s "$f") / 1024))"
+done
+
+bytes="$(stat -c %s "$OUT/terminal-delight.webp")"
+if [[ $bytes -gt 102400 ]]; then
+  echo "  webp is over the ~100 KB budget — lower -quality or simplify" >&2
+  exit 1
+fi
