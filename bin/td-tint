@@ -22,6 +22,8 @@
 #                        current border rule, unrecorded fossils get reset
 #   td-tint --window 0x… --saturate on|off|toggle   crank this tile's text
 #                        saturation to the Terminal Delight look (and back)
+#   td-tint --window 0x… --crt on|off|toggle        give this tile the tube —
+#                        barrel warp and glass glare — or take it away
 #
 # Each painted window's pick is remembered at $XDG_RUNTIME_DIR/td-tint/<addr>
 # — runtime-only like everything else here (dies at logout), but enough that a
@@ -52,6 +54,12 @@ SYSTEM_THEMES="${OMARCHY_PATH:-/usr/share/omarchy}/themes"
 PALETTES="${XDG_DATA_HOME:-$HOME/.local/share}/terminal-delight/palettes"
 PREFIX="terminal-delight-"
 CURRENT="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme/colors.toml"
+CURRENT_NAME="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme.name"
+WINDOW_SHADER="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/shaders/surface.frag"
+# What a CRT-on tile rounds to when the desktop itself is square. The warp is
+# drawn for a squircle, and 14 is what install-curve.sh sets; a tile asking for
+# the tube on a square desktop still wants a tube-shaped one.
+CRT_ROUNDING_FALLBACK=14
 RUNDIR="${XDG_RUNTIME_DIR:-/tmp}/td-tint"
 SAT_FACTOR="1.6"  # how hard SATURATE cranks — tuned against the TD screenshots
 
@@ -125,6 +133,61 @@ base_for() { # key source -> path to colors.toml
   if [[ ${2:-td} == omarchy ]]; then d="$(omarchy_theme_dir "$1")" || return 1
   else d="$(palette_dir "$1")" || return 1; fi
   printf '%s/colors.toml\n' "$d"
+}
+
+# ---- the CRT switch -------------------------------------------------------
+#
+# `shaders/surface.frag` gates the whole Terminal Delight block — the barrel
+# warp AND the glass glare — on `USE_ROUNDING`. Hyprland compiles that variant
+# only for windows that have a rounding radius, so a window's ROUNDING PROP IS
+# ITS CRT POWER SWITCH. That is not a trick; it is the only live lever there
+# is. Hyprland reads window shaders once at startup, so the shader cannot be
+# swapped while you are looking at it, and the screen shader can only be
+# swapped at the price of wedging wlr-screencopy for hours. Rounding is a
+# per-window property the compositor already honours, live, per window.
+#
+# Terminal Delight's own windows are pinned to rounding 0 by the theme,
+# because they bend their own panes; nothing here aims at them.
+crt_available() {
+  [[ -f $WINDOW_SHADER ]] && grep -q "terminal-delight" "$WINDOW_SHADER"
+}
+
+# Two different questions, and conflating them is how a toggle comes to do
+# nothing on the first press. What the DESKTOP rounds to answers "is this tile
+# already curved?" and may legitimately be 0. What "on" SETS answers "what
+# should a tile asking for the tube get", and may never be 0.
+desktop_rounding() {
+  local v
+  v=$(hyprctl getoption decoration:rounding 2>/dev/null | awk '/^int:/ { print $2; exit }')
+  [[ $v =~ ^[0-9]+$ ]] && printf '%s\n' "$v" || printf '0\n'
+}
+
+crt_rounding() {
+  local v; v="$(desktop_rounding)"
+  ((v > 0)) && printf '%s\n' "$v" || printf '%s\n' "$CRT_ROUNDING_FALLBACK"
+}
+
+# The single place that speaks Hyprland's Lua dispatch API. `value` arrives
+# already in Lua form — quoted for a string prop, bare for a number — because
+# that is the only way the two differ, and a flag to decide it would be more
+# machinery than the difference is worth.
+win_prop() { # addr prop lua-value
+  [[ -n $1 ]] || return 0
+  hyprctl dispatch \
+    "hl.dsp.window.set_prop({ prop = \"$2\", value = $3, window = \"address:$1\" })" \
+    >/dev/null 2>&1 || true
+}
+
+set_rounding() { # addr value
+  win_prop "$1" rounding "$2"
+}
+
+# The name Omarchy is wearing right now, read at call time. The picker draws a
+# card per installed theme and marks this one, so "back to the desktop" names
+# something instead of being an abstraction.
+desktop_theme() {
+  [[ -f $CURRENT_NAME ]] || return 0
+  head -1 "$CURRENT_NAME" | tr -d '\n'
 }
 
 glyph_of() {
@@ -461,18 +524,27 @@ emit_themes_json() {
   done < <(omarchy_themes) | cards_json
 }
 
-# The pick record: line 1 the key ("-" = none), then optional "sat=1" and
-# "src=omarchy" lines. A record written before there were two sources has no
-# src line and reads as a palette, which is exactly what it was.
+# The pick record: line 1 the key ("-" = none), then optional "sat=1",
+# "src=omarchy" and "crt=on|off" lines. Each is written only when it deviates
+# from the default, so a record written before a field existed reads correctly
+# as "never asked" rather than as an explicit choice.
+#
+# crt is the one worth stating plainly: an ABSENT crt line means the tile has
+# never been switched either way and inherits the desktop's rounding. That is
+# not the same as "crt=on", which is a tile switched on deliberately and which
+# --sync must re-pin. set_prop has no working unset, so "explicitly on" and
+# "never touched" cannot be collapsed into one state.
 rec_variant() { [[ -f $1 ]] && head -1 "$1" || true; }
 rec_sat()     { [[ -f $1 ]] && grep -qx "sat=1" "$1" && echo 1 || true; }
 rec_src()     { [[ -f $1 ]] && grep -qx "src=omarchy" "$1" && echo omarchy || echo td; }
-rec_write()   { # path key sat [src]
+rec_crt()     { [[ -f $1 ]] && sed -n 's/^crt=\(on\|off\)$/\1/p' "$1" | head -1 || true; }
+rec_write()   { # path key sat [src] [crt]
   mkdir -p "$RUNDIR"
   {
     printf '%s\n' "$2"
     if [[ "$3" == 1 ]]; then printf 'sat=1\n'; fi
     if [[ "${4:-td}" == omarchy ]]; then printf 'src=omarchy\n'; fi
+    case "${5:-}" in on|off) printf 'crt=%s\n' "$5" ;; esac
   } >"$1"
 }
 
@@ -495,15 +567,20 @@ theme_border_args() {
 # gradient; unfocused keeps the variant's hue as a quiet solid. Setting both
 # states to the same bright value — the old behaviour — made a wall of tinted
 # terminals read identity but never focus.
-set_border() {
-  local addr="$1" active="$2" inactive="$3"
-  [[ -n $addr ]] || return 0
-  hyprctl dispatch \
-    "hl.dsp.window.set_prop({ prop = \"active_border_color\", value = \"$active\", window = \"address:$addr\" })" \
-    >/dev/null 2>&1 || true
-  hyprctl dispatch \
-    "hl.dsp.window.set_prop({ prop = \"inactive_border_color\", value = \"$inactive\", window = \"address:$addr\" })" \
-    >/dev/null 2>&1 || true
+set_border() { # addr active inactive
+  win_prop "$1" active_border_color "\"$2\""
+  win_prop "$1" inactive_border_color "\"$3\""
+}
+
+# The border a PICK wears: the loud 45° gradient while focused, the same hue
+# dimmed while not. Two call sites carried their own copy of this arithmetic,
+# which is exactly how a repaint and a sweep come to draw different borders
+# for the same pick and nobody notices for a week.
+pick_border_args() { # colours-file -> active\ninactive
+  local a b
+  a=$(omarchy-theme-color --file "$1" accent)
+  b=$(omarchy-theme-color --file "$1" bright_cyan "$a")
+  printf '%s\n%s\n' "rgba(${a#\#}ee) rgba(${b#\#}ee) 45deg" "rgba($(dim_hex "$a")cc)"
 }
 
 # Somebody ELSE'S terminal: --window hands us the Hyprland address, the client
@@ -609,9 +686,8 @@ case "${1:-}" in
       src="$(rec_src "$rec")"
       base=""
       if [[ -n $v && $v != "-" ]] && base="$(base_for "$v" "$src")"; then
-        a=$(omarchy-theme-color --file "$base" accent)
-        b=$(omarchy-theme-color --file "$base" bright_cyan "$a")
-        set_border "$addr" "rgba(${a#\#}ee) rgba(${b#\#}ee) 45deg" "rgba($(dim_hex "$a")cc)"
+        mapfile -t pb < <(pick_border_args "$base")
+        set_border "$addr" "${pb[0]}" "${pb[1]}"
       elif [[ $v == "-" ]]; then
         base="$CURRENT"
         if [[ ${#THEME_TB[@]} -eq 2 ]]; then set_border "$addr" "${THEME_TB[0]}" "${THEME_TB[1]}"; fi
@@ -622,6 +698,13 @@ case "${1:-}" in
       if [[ -n $base && -f $base && "$(rec_sat "$rec")" == 1 ]]; then
         if t=$(window_tty "$addr"); then paint_tty "$t" "$base" 1; fi
       fi
+      # …and so does an explicit CRT choice. Only an EXPLICIT one: a window
+      # that never asked keeps inheriting, and pinning its rounding here would
+      # quietly opt every terminal on the box out of the desktop's own setting.
+      case "$(rec_crt "$rec")" in
+        on)  set_rounding "$addr" "$(crt_rounding)" ;;
+        off) set_rounding "$addr" 0 ;;
+      esac
     else
       # an unrecorded window can only carry junk props by accident — pin it
       # to exactly what the theme would draw (set_prop "unset" is a no-op),
@@ -662,21 +745,29 @@ case "${1:-}" in
   if [[ -d $RUNDIR ]]; then
     recs=$(for f in "$RUNDIR"/0x*; do
       [[ -f $f ]] || continue
-      printf '%s\t%s\t%s\t%s\n' "$(basename "$f")" "$(rec_variant "$f")" \
-        "$(rec_sat "$f")" "$(rec_src "$f")"
+      printf '%s\t%s\t%s\t%s\t%s\n' "$(basename "$f")" "$(rec_variant "$f")" \
+        "$(rec_sat "$f")" "$(rec_src "$f")" "$(rec_crt "$f")"
     done | jq -R -s '
       split("\n") | map(select(length > 0) | split("\t")
-        | {(.[0]): {v: .[1], s: (.[2] == "1"), src: (.[3] // "td")}}) | add // {}')
+        | {(.[0]): {v: .[1], s: (.[2] == "1"), src: (.[3] // "td"),
+                    crt: (.[4] // "")}}) | add // {}')
   fi
+  crt_round="$(crt_rounding)"
+  desk_round="$(desktop_rounding)"
+  crt_avail=false; crt_available && crt_avail=true
   variants_json="$(emit_variants_json)"
   themes_json="$(emit_themes_json)"
   jq -n --argjson c "$clients" --argjson aw "$aws" --argjson m "$mons" \
         --argjson r "$recs" --argjson v "$variants_json" --argjson th "$themes_json" \
-        --argjson tc "$TERM_CLASSES" --argjson fw "$awin" '
+        --argjson tc "$TERM_CLASSES" --argjson fw "$awin" \
+        --argjson ca "$crt_avail" --argjson cr "$crt_round" --argjson dr "$desk_round" \
+        --arg dt "$(desktop_theme)" '
     (($m | map(select(.focused)) | first) // ($m | first)) as $mon |
     {
       variants: $v,
       themes: $th,
+      desktop_theme: (if $dt == "" then null else $dt end),
+      crt: {available: $ca, rounding: $cr},
       active_workspace: $aw,
       focused: ($fw.address // null),
       monitor: {name: $mon.name, x: $mon.x, y: $mon.y},
@@ -690,9 +781,44 @@ case "${1:-}" in
            at, size,
            variant: ((($r[.address] // {}).v // "-") | if . == "-" then null else . end),
            source: (($r[.address] // {}).src // "td"),
-           saturated: (($r[.address] // {}).s // false)}
+           saturated: (($r[.address] // {}).s // false),
+           crt: (($r[.address] // {}).crt as $c
+                 | if $c == "on" then true
+                   elif $c == "off" then false
+                   else $dr > 0 end)}
       ]
     }'
+  exit 0
+  ;;
+--crt)
+  # The tube, per tile. Nothing is repainted: this sets one window property and
+  # the compositor picks the shader variant on the next frame.
+  mode="${2:-toggle}"
+  case "$mode" in on|off|toggle) ;; *) die "--crt takes on|off|toggle" ;; esac
+  command -v hyprctl >/dev/null || die "--crt needs a Hyprland session"
+  crt_available || echo "td-tint: the per-window warp is not installed — run ./install-curve.sh, then log back in" >&2
+  if [[ -n $TARGET_ADDR ]]; then addr="$TARGET_ADDR"; else addr=$(this_window) || true; fi
+  [[ -n ${addr:-} ]] || die "no window to switch — pass --window"
+  rec="$RUNDIR/$addr"
+  cur="$(rec_crt "$rec")"
+  # An unswitched tile inherits the desktop, so a toggle asks the DESKTOP what
+  # it is turning off. Ask crt_rounding instead and the answer is never "off",
+  # because that one has a floor — the first press on a square desktop would
+  # turn the tube "off" and appear to do nothing.
+  if [[ -z $cur ]]; then
+    if (( $(desktop_rounding) > 0 )); then cur=on; else cur=off; fi
+  fi
+  new="$mode"
+  if [[ "$mode" == toggle ]]; then
+    if [[ "$cur" == on ]]; then new=off; else new=on; fi
+  fi
+  if [[ $new == on ]]; then set_rounding "$addr" "$(crt_rounding)"; else set_rounding "$addr" 0; fi
+  # `-` and not the empty string when this tile has no pick: --sync reads an
+  # empty key as a corrupt record and sweeps the file, which would throw the
+  # CRT choice away with it the next time the desktop theme changed.
+  cv="$(rec_variant "$rec")"
+  rec_write "$rec" "${cv:--}" "$(rec_sat "$rec")" "$(rec_src "$rec")" "$new"
+  if [[ $new == on ]]; then echo "📺  the tube is on"; else echo "the tube is off — flat glass"; fi
   exit 0
   ;;
 --saturate)
@@ -712,6 +838,7 @@ case "${1:-}" in
   rec="${addr:+$RUNDIR/$addr}"
   v="$(rec_variant "$rec")"
   vsrc="$(rec_src "$rec")"
+  vcrt="$(rec_crt "$rec")"
   cur="$(rec_sat "$rec")"
   new=1
   [[ "$mode" == off ]] && new=0
@@ -726,13 +853,18 @@ case "${1:-}" in
     paint_tty "$tty" "$base" 0
     echo "saturation back to base"
   fi
-  if [[ -n ${addr:-} ]]; then rec_write "$rec" "${v:--}" "$new" "$vsrc"; fi
+  if [[ -n ${addr:-} ]]; then rec_write "$rec" "${v:--}" "$new" "$vsrc" "$vcrt"; fi
   exit 0
   ;;
 --clear)
   if [[ -n $TARGET_ADDR ]]; then
-    tty=$(window_tty "$TARGET_ADDR") || die "no shell tty behind window $TARGET_ADDR"
     addr="$TARGET_ADDR"
+    # Best-effort, and deliberately not fatal. A window whose shell has since
+    # exited has no tty to repaint — but it still wears a border and a
+    # rounding that WE pinned and that nothing else will ever hand back.
+    # Refusing the whole verb because one of its three jobs is impossible is
+    # how a tile ends up permanently stuck in a colour you cannot clear.
+    tty=$(window_tty "$TARGET_ADDR") || tty=""
   else
     tty=$(this_tty) || true
     addr=$(this_window) || true
@@ -742,6 +874,11 @@ case "${1:-}" in
     if mapfile -t tb < <(theme_border_args) && [[ ${#tb[@]} -eq 2 ]]; then
       set_border "$addr" "${tb[0]}" "${tb[1]}"
     fi
+    # "Follows the desktop" has to include the tube, or a tile cleared after
+    # its CRT was switched off keeps a flatness nothing on screen explains.
+    # set_prop cannot unset, so following means being SET to what the desktop
+    # would have drawn.
+    set_rounding "$addr" "$(crt_rounding)"
     rm -f "$RUNDIR/$addr"
   fi
   echo "cleared — this terminal follows the desktop theme again."
@@ -788,6 +925,7 @@ fi
 # repainting changes the hue, not the crank.
 if [[ -n $TARGET_ADDR ]]; then addr="$TARGET_ADDR"; else addr=$(this_window) || true; fi
 prior_sat="$(rec_sat "${addr:+$RUNDIR/$addr}")"
+prior_crt="$(rec_crt "${addr:+$RUNDIR/$addr}")"
 
 # 1. the text: the target terminal's own palette, straight down its tty
 # (skipped under --border-only — the tube already shows the right colours)
@@ -802,14 +940,13 @@ if [[ -z $BORDER_ONLY ]]; then
 fi
 
 # 2. the frame: this window's own border, so it reads while unfocused too
-accent=$(omarchy-theme-color --file "$colors" accent)
-partner=$(omarchy-theme-color --file "$colors" bright_cyan "$accent")
-set_border "${addr:-}" "rgba(${accent#\#}ee) rgba(${partner#\#}ee) 45deg" "rgba($(dim_hex "$accent")cc)"
+mapfile -t pb < <(pick_border_args "$colors")
+set_border "${addr:-}" "${pb[0]}" "${pb[1]}"
 
 # remember the pick, so a later repair restores instead of guessing —
 # carrying SATURATE across it. `--saturate off` is the way to pour it back.
 if [[ -n ${addr:-} ]]; then
-  rec_write "$RUNDIR/$addr" "$variant" "${prior_sat:-0}" "$SRC"
+  rec_write "$RUNDIR/$addr" "$variant" "${prior_sat:-0}" "$SRC" "$prior_crt"
 fi
 
 if [[ $SRC == omarchy ]]; then

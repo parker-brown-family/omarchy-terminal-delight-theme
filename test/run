@@ -54,6 +54,13 @@ printf '🍒\n' > "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-cherry/glyph
 cp "$here/fixtures/variant-cherry.toml" "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-bat/colors.toml"
 printf '🦇\n' > "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-bat/glyph"
 cp "$here/fixtures/theme-colors.toml" "$XDG_STATE_HOME/omarchy/current/theme/colors.toml"
+printf 'terminal-delight\n' > "$XDG_STATE_HOME/omarchy/current/theme.name"
+# The per-window warp, as install-curve.sh would have left it. Its presence is
+# what td-tint reports as crt.available, and the marker is what distinguishes
+# our shader from somebody else's file of the same name.
+mkdir -p "$XDG_CONFIG_HOME/hypr/shaders"
+printf '// terminal-delight per-window curved glass\n' \
+  > "$XDG_CONFIG_HOME/hypr/shaders/surface.frag"
 cp "$here/fixtures/monitor.frag" "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight/crt-glass.frag"
 cp "$here/fixtures/monitor.frag" "$XDG_CONFIG_HOME/omarchy/themes/terminal-delight-cherry/crt-glass.frag"
 cp "$here/fixtures/monitor.frag" "$XDG_STATE_HOME/omarchy/current/theme/crt-glass.frag"
@@ -161,6 +168,21 @@ fi
 assert_eq "theme_label title-cases a dashed name" "$(theme_label osaka-jade)" "Osaka Jade"
 assert_eq "…and leaves digits alone" "$(theme_label retro-82)" "Retro 82"
 
+echo "— the CRT switch resolves two different rounding questions"
+assert_eq "the desktop's rounding is read live" "$(desktop_rounding)" "14"
+assert_eq "…and is what a tile switched ON takes" "$(crt_rounding)" "14"
+assert_eq "a square desktop still reports itself square" \
+  "$(TD_TEST_ROUNDING=0 desktop_rounding)" "0"
+assert_eq "…but a tile asking for the tube gets one anyway" \
+  "$(TD_TEST_ROUNDING=0 crt_rounding)" "14"
+if crt_available; then ok "the installed warp is detected"; else no "the installed warp is detected"; fi
+mv "$XDG_CONFIG_HOME/hypr/shaders/surface.frag" "$T/shader.away"
+if crt_available; then no "a missing warp is reported missing"; else ok "a missing warp is reported missing"; fi
+printf 'not ours\n' > "$XDG_CONFIG_HOME/hypr/shaders/surface.frag"
+if crt_available; then no "somebody else's surface.frag is not our warp"; else ok "somebody else's surface.frag is not our warp"; fi
+mv "$T/shader.away" "$XDG_CONFIG_HOME/hypr/shaders/surface.frag"
+assert_eq "the live desktop theme is read by name" "$(desktop_theme)" "terminal-delight"
+
 echo "— records remember which list a pick came from"
 srec="$T/run/td-tint-srcrec-test"
 rec_write "$srec" osaka-jade 0 omarchy
@@ -170,6 +192,14 @@ assert_eq "a palette pick records none, and reads as the palette set" "$(rec_src
 assert_eq "…without disturbing the crank" "$(rec_sat "$srec")" "1"
 assert_eq "a record written before there were two sources reads as a palette" \
   "$(printf 'cherry\n' > "$srec"; rec_src "$srec")" "td"
+rec_write "$srec" cherry 0 td off
+assert_eq "an explicit CRT choice round-trips" "$(rec_crt "$srec")" "off"
+rec_write "$srec" cherry 0 td on
+assert_eq "…both ways" "$(rec_crt "$srec")" "on"
+rec_write "$srec" cherry 0 td
+assert_eq "no choice is not a choice — an untouched tile inherits the desktop" "$(rec_crt "$srec")" ""
+assert_eq "…and 'inherit' is distinct from 'explicitly on', which --sync must re-pin" \
+  "$(rec_write "$srec" cherry 0 td on; rec_crt "$srec")" "on"
 
 echo "— td-tint --json"
 json="$(bash "$root/bin/td-tint" --json)"
@@ -231,6 +261,12 @@ state="$(bash "$root/bin/td-tint" --state)"
 assert_eq "state sees the four terminal tiles, not chrome" "$(jq '.tiles | length' <<<"$state")" "4"
 assert_eq "state carries the variant contract" "$(jq '.variants | length' <<<"$state")" "2"
 assert_eq "…and the theme contract beside it" "$(jq '.themes | length' <<<"$state")" "4"
+assert_eq "state names the theme the desktop is wearing right now" \
+  "$(jq -r '.desktop_theme' <<<"$state")" "terminal-delight"
+assert_eq "state reports the warp is installed, and what ON would round to" \
+  "$(jq -c '[.crt.available, .crt.rounding]' <<<"$state")" "[true,14]"
+assert_eq "a tile nobody switched inherits the desktop's tube" \
+  "$(jq -r '.tiles[] | select(.address=="0xbbb") | .crt' <<<"$state")" "true"
 assert_eq "a tile reports which list its pick came from" \
   "$(jq -r '.tiles[] | select(.address=="0xaaa") | .source' <<<"$state")" "td"
 assert_eq "state names the active workspace" "$(jq '.active_workspace' <<<"$state")" "1"
@@ -269,12 +305,16 @@ mcp_out="$(printf '%s\n' \
   '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"list_tiles","arguments":{}}}' \
   '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"nope","arguments":{}}}' \
   '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"state","arguments":{}}}' \
+  '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"list_themes","arguments":{}}}' \
+  '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"crt","arguments":{"address":"0xbbb","mode":"off"}}}' \
   | python3 "$root/bin/td-mcp")"
 line() { sed -n "${1}p" <<<"$mcp_out"; }
 assert_eq "initialize answers the protocol version" "$(line 1 | jq -r .result.protocolVersion)" "2024-11-05"
 assert_eq "server names itself" "$(line 1 | jq -r .result.serverInfo.name)" "td-paint"
 assert_eq "ping pongs (empty result, no error)" "$(line 2 | jq -c .result)" "{}"
-assert_eq "tools/list advertises the full surface" "$(line 3 | jq '.result.tools | length >= 10')" "true"
+assert_eq "tools/list advertises the full surface" "$(line 3 | jq '.result.tools | length >= 13')" "true"
+assert_has "…including the second source" "$(line 3 | jq -r '.result.tools[].name' | tr '\n' ' ')" "paint_theme"
+assert_has "…and the tube" "$(line 3 | jq -r '.result.tools[].name' | tr '\n' ' ')" "crt"
 assert_has "tools/list includes paint" "$(line 3 | jq -r '.result.tools[].name' | tr '\n' ' ')" "paint"
 assert_eq "every tool ships a description and schema" "$(line 3 | jq '(.result.tools | length) as $n | [.result.tools[] | select((.description | length) > 0 and .inputSchema.type == "object")] | length == $n')" "true"
 assert_eq "list_variants returns parseable variants" "$(line 4 | jq -r '.result.content[0].text' | jq 'length')" "2"
@@ -288,6 +328,9 @@ assert_eq "list_tiles reports the '-' pin as no variant" "$(jq -r '.[] | select(
 assert_eq "list_tiles flags terminal-delight windows" "$(jq -r '.[] | select(.address=="0xddd") | .terminal_delight' <<<"$tiles")" "true"
 assert_eq "unknown tool is a JSON-RPC error" "$(line 8 | jq -r '.error.code')" "-32602"
 assert_eq "the state tool relays the oracle verbatim" "$(line 9 | jq -r '.result.content[0].text' | jq -r '.focused')" "0xbbb"
+assert_eq "list_themes reaches the second source" "$(line 10 | jq -r '.result.content[0].text' | jq 'length')" "4"
+assert_has "the crt tool switches the tube through the CLI" "$(line 11 | jq -r '.result.content[0].text')" "flat glass"
+assert_eq "…and it lands in the record" "$(rec_crt "$XDG_RUNTIME_DIR/td-tint/0xbbb")" "off"
 
 echo "— option terminator (a variant key that looks like a flag)"
 # Deliberately last: this installs a third variant, and the counts asserted
@@ -354,6 +397,64 @@ assert_has "…and the refusal names the list to look in" "$err" "td-tint --them
 err="$(bash "$root/bin/td-tint" --theme nord cherry 2>&1)"
 if [[ $? -ne 0 ]]; then ok "--theme with a stray second name is refused"; else no "--theme with a stray second name is refused"; fi
 assert_has "…and the refusal shows the shape that works" "$err" "td-tint --theme 'nord'"
+
+echo "— the CRT switch, end to end"
+: > "$TD_TEST_LOG/hyprctl.log"
+out="$(bash "$root/bin/td-tint" --window 0xaaa --crt off 2>&1)"
+assert_has "it says the tube went out" "$out" "flat glass"
+assert_has "the window's rounding is set to zero — the shader variant that has no warp" \
+  "$(cat "$TD_TEST_LOG/hyprctl.log")" 'prop = "rounding", value = 0, window = "address:0xaaa"'
+assert_eq "the choice is recorded" "$(rec_crt "$XDG_RUNTIME_DIR/td-tint/0xaaa")" "off"
+assert_eq "…without disturbing the pick it was wearing" \
+  "$(rec_variant "$XDG_RUNTIME_DIR/td-tint/0xaaa")" "osaka-jade"
+assert_eq "…or which list that pick came from" "$(rec_src "$XDG_RUNTIME_DIR/td-tint/0xaaa")" "omarchy"
+
+: > "$TD_TEST_LOG/hyprctl.log"
+bash "$root/bin/td-tint" --window 0xaaa --crt toggle >/dev/null
+assert_eq "toggle brings it back" "$(rec_crt "$XDG_RUNTIME_DIR/td-tint/0xaaa")" "on"
+assert_has "…rounded to what the desktop uses, not to a number of our own" \
+  "$(cat "$TD_TEST_LOG/hyprctl.log")" 'prop = "rounding", value = 14'
+
+# The first press on an untouched tile is the one that used to do nothing: it
+# has no record, so the toggle has to ask the DESKTOP what it is turning off.
+rm -f "$XDG_RUNTIME_DIR/td-tint/0xbbb"
+bash "$root/bin/td-tint" --window 0xbbb --crt toggle >/dev/null
+assert_eq "the first toggle on an inheriting tile turns it OFF" \
+  "$(rec_crt "$XDG_RUNTIME_DIR/td-tint/0xbbb")" "off"
+
+: > "$TD_TEST_LOG/hyprctl.log"
+bash "$root/bin/td-tint" --window 0xaaa --saturate on >/dev/null 2>&1 || true
+assert_eq "saturating a tile does not forget its tube" \
+  "$(rec_crt "$XDG_RUNTIME_DIR/td-tint/0xaaa")" "on"
+
+: > "$TD_TEST_LOG/hyprctl.log"
+bash "$root/bin/td-tint" --window 0xaaa --border-only --theme osaka-jade >/dev/null
+assert_eq "…and neither does repainting it" "$(rec_crt "$XDG_RUNTIME_DIR/td-tint/0xaaa")" "on"
+
+: > "$TD_TEST_LOG/hyprctl.log"
+bash "$root/bin/td-tint" --sync >/dev/null
+hlog="$(cat "$TD_TEST_LOG/hyprctl.log")"
+assert_has "--sync re-pins an explicit CRT choice" "$hlog" 'prop = "rounding", value = 0, window = "address:0xbbb"'
+assert_eq "…and leaves a tile that never asked to keep inheriting" \
+  "$(grep -c 'prop = "rounding".*address:0xeee' <<<"$hlog")" "0"
+
+: > "$TD_TEST_LOG/hyprctl.log"
+bash "$root/bin/td-tint" --window 0xbbb --clear >/dev/null
+assert_has "clearing a tile hands the tube back with everything else" \
+  "$(cat "$TD_TEST_LOG/hyprctl.log")" 'prop = "rounding", value = 14, window = "address:0xbbb"'
+assert_eq "…and the record goes with it" "$(rec_crt "$XDG_RUNTIME_DIR/td-tint/0xbbb")" ""
+
+bash "$root/bin/td-tint" --window 0xeee --crt off >/dev/null
+state3="$(bash "$root/bin/td-tint" --state)"
+assert_eq "the oracle reports a switched-off tile as off" \
+  "$(jq -r '.tiles[] | select(.address=="0xeee") | .crt' <<<"$state3")" "false"
+assert_eq "…and a switched-on one as on" \
+  "$(jq -r '.tiles[] | select(.address=="0xaaa") | .crt' <<<"$state3")" "true"
+if bash "$root/bin/td-tint" --window 0xaaa --crt sideways >/dev/null 2>&1; then
+  no "--crt refuses a mode it does not have"
+else
+  ok "--crt refuses a mode it does not have"
+fi
 
 echo "— the palette home retires the theme-shaped install"
 # Last, because it changes what `variants()` answers: the point of the new

@@ -21,7 +21,7 @@ import subprocess
 import sys
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "td-paint", "version": "0.1.0"}
+SERVER_INFO = {"name": "td-paint", "version": "0.3.0"}
 
 
 def run(argv, timeout=15):
@@ -43,6 +43,13 @@ def run(argv, timeout=15):
 
 def tool_list_variants(_args):
     rc, out, err = run(["td-tint", "--json"])
+    if rc != 0:
+        return err or out, True
+    return out, False
+
+
+def tool_list_themes(_args):
+    rc, out, err = run(["td-tint", "--themes-json"])
     if rc != 0:
         return err or out, True
     return out, False
@@ -77,8 +84,18 @@ def tool_paint(args):
     return _tint(args, ["--", args["variant"]])
 
 
+# `--theme` carries its own name rather than leaving it positional: the two
+# namespaces can hold the same word, and the tool must never have to guess.
+def tool_paint_theme(args):
+    return _tint(args, ["--theme", args["theme"]])
+
+
 def tool_border_only(args):
     return _tint(args, ["--border-only", "--", args["variant"]])
+
+
+def tool_crt(args):
+    return _tint(args, ["--crt", args.get("mode", "toggle")])
 
 
 def tool_saturate(args):
@@ -133,12 +150,17 @@ def addr_schema(extra_props=None, extra_required=None):
 
 TOOLS = {
     "list_variants": {
-        "description": "The installed Terminal Delight variant set: key, glyph, accent, partner colour.",
+        "description": "The installed Terminal Delight palette set: key, label, glyph, accent, partner, background, foreground. Read live from the palette directory.",
         "inputSchema": {"type": "object", "properties": {}},
         "fn": tool_list_variants,
     },
+    "list_themes": {
+        "description": "Every Omarchy theme installed on THIS machine, in the same card shape as list_variants (a theme carries no glyph). Read live from the theme directories at the moment of the call — a theme installed a minute ago is in this list.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "fn": tool_list_themes,
+    },
     "state": {
-        "description": "The whole paint oracle in one document: variants, active workspace, focused monitor, and every terminal tile with class/pid/geometry/recorded variant/saturation. Same JSON as `td-tint --state`.",
+        "description": "The whole paint oracle in one document: both card lists, the theme the desktop is wearing, whether the per-window CRT warp is installed, the active workspace, the focused monitor, and every terminal tile with class/pid/geometry/pick/source/saturation/crt. Same JSON as `td-tint --state`.",
         "inputSchema": {"type": "object", "properties": {}},
         "fn": tool_state,
     },
@@ -148,9 +170,14 @@ TOOLS = {
         "fn": tool_list_tiles,
     },
     "paint": {
-        "description": "Paint one terminal window with a variant: OSC palette down its tty plus identity border (bright focused, dimmed unfocused).",
-        "inputSchema": addr_schema({"variant": {"type": "string", "description": "variant key from list_variants"}}, ["variant"]),
+        "description": "Paint one terminal window with a Terminal Delight palette: OSC palette down its tty plus identity border (bright focused, dimmed unfocused).",
+        "inputSchema": addr_schema({"variant": {"type": "string", "description": "palette key from list_variants"}}, ["variant"]),
         "fn": tool_paint,
+    },
+    "paint_theme": {
+        "description": "Paint one terminal window with an Omarchy THEME instead of a palette — the same colours the theme grid would put on the whole desktop, aimed at one tile.",
+        "inputSchema": addr_schema({"theme": {"type": "string", "description": "theme name from list_themes"}}, ["theme"]),
+        "fn": tool_paint_theme,
     },
     "border_only": {
         "description": "Re-frame a window's identity border without touching its text palette (the repair verb).",
@@ -162,8 +189,13 @@ TOOLS = {
         "inputSchema": addr_schema({"mode": {"type": "string", "enum": ["on", "off", "toggle"]}}),
         "fn": tool_saturate,
     },
+    "crt": {
+        "description": "Give one tile the tube — the barrel warp and glass glare of the per-window shader — or take it away. Needs install-curve.sh; `state.crt.available` says whether it is installed. A tile that has never been switched inherits the desktop's rounding, which is a third state distinct from on and off.",
+        "inputSchema": addr_schema({"mode": {"type": "string", "enum": ["on", "off", "toggle"]}}),
+        "fn": tool_crt,
+    },
     "clear": {
-        "description": "Hand a tile back to the desktop theme: palette, borders and record.",
+        "description": "Hand a tile back to the desktop theme: palette, borders, the tube, and the record.",
         "inputSchema": addr_schema(),
         "fn": tool_clear,
     },

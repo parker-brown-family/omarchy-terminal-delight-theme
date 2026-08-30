@@ -16,7 +16,7 @@ jobs:
         run: ./test/run
 
       - name: shellcheck
-        run: shellcheck -S warning bin/td-tint bin/td-monitor install-variants.sh install-curve.sh hooks/theme-set.d/td-tint-sync.hook test/run test/install-e2e test/probe-cube-demand test/verify-cube-live test/stubs/hyprctl test/stubs/omarchy-theme-color
+        run: shellcheck -S warning bin/td-tint bin/td-monitor bin/shoot-theme install-variants.sh install-curve.sh hooks/theme-set.d/td-tint-sync.hook test/run test/install-e2e test/probe-cube-demand test/verify-cube-live test/stubs/hyprctl test/stubs/omarchy-theme-color
 
       - name: td-mcp compiles
         run: python3 -m py_compile bin/td-mcp
