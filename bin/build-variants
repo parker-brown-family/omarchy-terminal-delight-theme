@@ -324,6 +324,21 @@ def preview_tile(key, v, p, out):
              "-depth", "8", "-strip", str(out)])
 
 
+GENERATED_MARKER = "Generated from variants.toml by bin/build-variants."
+
+
+def prune_stale_variants(dest, live_keys):
+    """Remove generated variants no longer present in variants.toml."""
+    for theme in dest.glob("terminal-delight-*"):
+        if theme.name.removeprefix("terminal-delight-") in live_keys:
+            continue
+
+        colors = theme / "colors.toml"
+        if colors.is_file() and GENERATED_MARKER in colors.read_text():
+            shutil.rmtree(theme)
+            print(f"  removed stale -> {theme}")
+
+
 # -------------------------------------------------------------------- main ---
 
 
@@ -346,6 +361,13 @@ def main():
 
     dest = pathlib.Path(args.into).expanduser() if args.into else \
         pathlib.Path.home() / ".config/omarchy/themes"
+
+    # A corrected or deleted manifest key must not survive forever in Omarchy's
+    # picker. Only directories carrying our generated marker are eligible;
+    # similarly named hand-written themes are left alone. A partial --only build
+    # cannot know whether the other installed variants are intentionally absent.
+    if not args.only and not args.previews_only:
+        prune_stale_variants(dest, variants)
 
     for key, v in variants.items():
         if args.only and key != args.only:
