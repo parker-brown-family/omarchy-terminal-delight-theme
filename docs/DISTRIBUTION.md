@@ -13,13 +13,70 @@ X promotion money). Core stays lean; **the bolt-on ecosystem is the point.**
 We do not aim for core inclusion — we aim to be an exemplary citizen of the
 ecosystem that is actually growing.
 
-## Channel 1 — this repo (the theme + engine): shipping NOW
+## Channel 1 — this repo (the theme + engine)
 
 Users install the theme straight from the public repo (see README), which
 brings the 11 palettes, the curve + per-tile glare, the monitor pass,
-`td-tint`/`td-monitor`/`td-mcp` and the self-healing hook. Released as
-**v0.1.0** with a gallery. Optional reach: a PR to
-[awesome-omarchy](https://github.com/aorumbayev/awesome-omarchy).
+`td-tint`/`td-monitor`/`td-mcp` and the self-healing hook. **Shipped, current
+release v0.3.0.**
+
+### What a theme actually has to author
+
+Researched against Omarchy 4.0.1 on 2026-08-30, because the shipped themes are
+misleading on this point. 22 of 22 carry `neovim.lua`, `vscode.json`,
+`btop.theme` and friends, and **none of that is a theme's job any more**:
+`omarchy-theme-set-templates` generates every one of them from `colors.toml`
+via `$OMARCHY_PATH/default/themed/*.tpl` — neovim, btop, chromium, vscode,
+helix, kitty/foot/ghostty/alacritty, claude, obsidian, even the keyboard RGB.
+
+Shipping them is worse than pointless. `INSTALLED_THEME_DENIED` plus a blanket
+`*.lua` rule strips them from any theme installed from a repo, so they would be
+dead weight in the clone and absent from the staged theme.
+
+A theme authors four things:
+
+| File | Why |
+|---|---|
+| `colors.toml` | every generated config comes from here |
+| `backgrounds/` | at least one, or the switcher has nothing to preview |
+| `icons.theme` | one line naming a GTK icon theme |
+| `preview.png` | the tile in Omarchy's own theme grid |
+
+`unlock.png` and `preview-unlock.png` are the trap: every shipped theme has
+both, and **nothing in Omarchy 4.x reads either.** `LockView.qml` blurs the
+wallpaper. They are Omarchy 3 leftovers; do not add them.
+
+## Channel 1b — omarchy.org/themes: the official listing
+
+A pull request to [`omacom/omarchy-site`](https://github.com/omacom/omarchy-site)
+(`omacom-io` redirects to it; default branch `master`), touching two paths:
+`assets/themes/<name>.webp` and an alphabetical `<figure>` in
+`themes/index.html`. Their README sets the terms, and the last line is the one
+that matters: *"Pull requests without a screenshot can't be merged, because
+there's nothing to put on the page."*
+
+The screenshot brief, verbatim in effect:
+
+- WebP, aim 1200x675, under about 100 KB
+- their own recipe: `magick shot.png -strip -resize '1200>' -quality 80 out.webp`
+- a **real session with a terminal AND an editor**, not an empty desktop
+- the **theme's own wallpaper**
+- no cursor, no notification, nothing personal
+- don't scale a small capture up
+
+`bin/shoot-theme` builds exactly that, reproducibly, on a workspace it stages
+itself — see its header for the three things it had to learn to make a 3840px
+capture legible at 1200. **Submitted 2026-08-30 as
+[omarchy-site#122](https://github.com/omacom/omarchy-site/pull/122).**
+
+## Channel 1c — awesome-omarchy: blocked, on purpose
+
+[awesome-omarchy](https://github.com/aorumbayev/awesome-omarchy) lists 100+
+themes and would be real reach, but its `CONTRIBUTING.md` requires **5+ GitHub
+stars** and enforces it in CI (`scripts/check-min-stars.py`). Both repos are at
+zero. A PR opened now fails their automated check on arrival, which is not how
+you introduce a project to a curated list. Tracked with the invalidation
+criterion as [omarchy-td-palette#10](https://github.com/parker-brown-family/omarchy-td-palette/issues/10).
 
 ## Channel 2 — the 🎨 widget: marketplace listing
 
@@ -52,7 +109,23 @@ checklist requires removal instructions in the README — it carries them
 now. Marketplace plugins are automatically eligible for future
 competitions — being listed IS the entry ticket.
 
-## Ready-to-submit checklist (graduation day: 2026-08-29)
+## Theme checklist (submitted: 2026-08-30)
+
+- [x] `colors.toml`, `backgrounds/`, `icons.theme`, `preview.png` — and nothing
+      that Omarchy generates for itself
+- [x] `test/install-e2e` — the REAL `omarchy-theme-install` and
+      `omarchy-theme-set` against a sandboxed `HOME`: 20 green, deny list
+      included, so a stranger's clone is proven rather than reasoned about
+- [x] `preview.png` regenerated from the current build — 282 KB, against a
+      stock theme's 350 KB and this repo's own previous 1.5 MB
+- [x] `assets/themes/terminal-delight.webp` — 1200x675, 40 KB, terminal +
+      editor, this theme's wallpaper, no cursor
+- [x] Entry filed alphabetically between Temerald and Terminus
+- [x] Both links point at this repository
+- [x] CI green: 172 assertions, shellcheck, `td-mcp` byte-compile, and every
+      generated frag compiled in both `ANIMATED` states
+
+## Plugin checklist (graduation day: 2026-08-29)
 
 - [x] `bin/graduate td-palette` (own repo, tag, preview)
 - [x] `omarchy plugin validate` clean on the graduated repo (exit 0)
@@ -75,3 +148,10 @@ competitions — being listed IS the entry ticket.
   competition + "500 plugins and growing"
 - <https://github.com/HANCORE-linux/omarchy-plugin-marketplace> — the registry
 - <https://omarchy.org/manual/shell-plugins/> — the plugin contract
+- <https://github.com/omacom/omarchy-site> — the themes page, and its
+  screenshot brief in the README under "Adding your theme"
+- <https://github.com/aorumbayev/awesome-omarchy/blob/main/CONTRIBUTING.md> —
+  the 5-star bar and the CI that enforces it
+- `$OMARCHY_PATH/default/themed/*.tpl` and `omarchy-theme-set:30`
+  (`INSTALLED_THEME_DENIED`) — what a theme must author, and what is generated
+  or stripped for it
