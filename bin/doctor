@@ -207,6 +207,22 @@ head_ "the tubes (optional — ./install-curve.sh --tubes)"
 if [[ $TUBES_TIER -eq 0 ]]; then
   note "not installed — the per-window warp is the other tier, and it is fine on its own"
 else
+  # The shader that RENDERS is the staged copy, not the checkout. Editing
+  # crt-glass.frag in the repo changes nothing until it is copied into the theme
+  # and re-staged — and in that gap td-tubes happily bakes a TUBE_CURV array the
+  # old tube_map never reads, so a curvature-0 surface is bowed anyway and
+  # nothing says a word. Compiles fine; just silently wrong.
+  if [[ -f "$STAGED/crt-glass.frag" ]]; then
+    if grep -q 'TUBE_CURV\[TUBE_COUNT\]' "$STAGED/crt-glass.frag" &&
+       ! grep -q 'TUBE_CURV\[i\]' "$STAGED/crt-glass.frag"; then
+      err "the staged shader bakes a curvature array it never reads" \
+          "$STAGED/crt-glass.frag has an older tube_map — flat surfaces will be bowed" \
+          "cp $root/crt-glass.frag \"\$(readlink -f $STAGED)\"/crt-glass.frag && td-tubes apply"
+    else
+      ok "the staged shader is new enough to honour per-tube curvature"
+    fi
+  fi
+
   if pgrep -f 'td-tubes watch' >/dev/null 2>&1; then
     ok "the watcher is running — tile rects follow the layout"
   else
