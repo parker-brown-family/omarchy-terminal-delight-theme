@@ -78,6 +78,74 @@ vec2 warp(vec2 uv) {
     return 0.5 + c * (1.0 + K1 * r2 + K2 * r2 * r2);
 }
 
+// ---- THE TUBES: one per tile, drawn in the pass that owns the cursor -------
+// The per-window shader (shaders/surface.frag) bows a window's texture during
+// renderWorkspace() — BEFORE renderSoftwareCursorsFor() puts the cursor into
+// the same buffer. Nothing drawn there can ever be click-correct: the
+// compositor hands the click to the flat window box while the picture has
+// moved up to 4% of the window away from it. The monitor pass runs after the
+// cursor is composited, so a tube drawn HERE moves cursor and content
+// together and a click lands where you aimed. Same reason terminal-delight's
+// own CRT pass is click-correct — see warp_screen_to_content in
+// app/src/pane.rs: the shader is a gather, and everything that has to agree
+// with it reads through the identical forward map.
+//
+// Hyprland screen shaders accept no custom uniforms, so the tile rects are
+// baked in as constants and the shader is recompiled when the layout changes —
+// the same trick td-monitor already uses for the knob block, a few ms and no
+// relogin. `td-tubes apply` rewrites the TUBE DATA block below.
+
+uniform int wl_output; // monitor id — one frag serves every monitor
+
+const float TUBE_K1 = 0.14; // surface.frag's constants, carried over unchanged
+const float TUBE_K2 = 0.06;
+
+// ---- TUBE DATA (managed by td-tubes — do not hand-edit) ----
+#define TUBE_COUNT 0
+#if TUBE_COUNT > 0
+const vec4 TUBE_RECT[TUBE_COUNT] = vec4[TUBE_COUNT](vec4(0.0));
+const int  TUBE_MON[TUBE_COUNT]  = int[TUBE_COUNT](0);
+#endif
+// ---- END TUBE DATA ----
+
+// Which tube owns this pixel, or -1 for bare desktop. td-tubes emits the list
+// most-recently-focused first and the first hit wins, so a window stacked over
+// a tile takes the pixels it covers instead of being bent by the tile beneath.
+int tube_at(vec2 px) {
+#if TUBE_COUNT > 0
+    for (int i = 0; i < TUBE_COUNT; i++) {
+        if (TUBE_MON[i] != wl_output)
+            continue;
+        vec2 l = (px - TUBE_RECT[i].xy) / TUBE_RECT[i].zw;
+        if (l.x >= 0.0 && l.x <= 1.0 && l.y >= 0.0 && l.y <= 1.0)
+            return i;
+    }
+#endif
+    return -1;
+}
+
+// Map a screen texcoord through tube `i` — identity when `i` is -1. `edge`
+// falls to 0 across the overscan band the gather pulls in from past the tile's
+// own edge; that band is the bezel, and it is why the tube reads as glass with
+// a rim rather than as a squashed window.
+vec2 tube_map(int i, vec2 t, vec2 res, out float edge) {
+    edge = 1.0;
+#if TUBE_COUNT > 0
+    if (i < 0)
+        return t;
+    vec4  r  = TUBE_RECT[i];
+    vec2  c  = ((t * res) - r.xy) / r.zw - 0.5;
+    float r2 = dot(c, c);
+    vec2  w  = 0.5 + c * (1.0 + TUBE_K1 * r2 + TUBE_K2 * r2 * r2);
+    vec2  e  = min(w, 1.0 - w);
+    edge     = smoothstep(0.0, 0.004, min(e.x, e.y));
+    return (r.xy + clamp(w, 0.0, 1.0) * r.zw) / res;
+#else
+    return t;
+#endif
+}
+// ---- end tubes -------------------------------------------------------------
+
 float hash(float n) { return fract(sin(n * 127.1) * 43758.5453); }
 
 // Occasional stepped flicker: a 0.45 s burst of five brightness steps —
@@ -141,20 +209,30 @@ void main() {
             uv0.y += (hash(jw + 3.0) - 0.5) * 4.0 * JIGGLE / res.y;
         }
     }
-    vec2 uv = warp(uv0);
+    // The desktop curve (CURV) first, then the per-tile tube on top of it, so a
+    // tube rect is looked up in the coordinates the desktop warp already moved.
+    // With CURV at 0 — the normal setting — warp() is the identity and the
+    // tubes are the only curve on the screen.
+    vec2 uvs = warp(uv0);
 
     // outside the tube -> bezel interior, with a soft edge
-    vec2  e    = min(uv, 1.0 - uv);
+    vec2  e    = min(uvs, 1.0 - uvs);
     float edge = smoothstep(0.0, 0.003, min(e.x, e.y));
+
+    int   tube = tube_at(uvs * res);
+    float tedge;
+    vec2  uv   = tube_map(tube, uvs, res, tedge);
+    edge       = min(edge, tedge);
     if (edge <= 0.0) { fragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
 
     float r2 = dot(uv - 0.5, uv - 0.5);
 
     // chromatic aberration: sample R/B at slightly different warps near the rim
     float a  = ABERR * 0.004 * r2;
-    float cr = texture(tex, warp(uv0 + vec2(a, 0.0))).r;
+    float ta;
+    float cr = texture(tex, tube_map(tube, warp(uv0 + vec2(a, 0.0)), res, ta)).r;
     float cg = texture(tex, uv).g;
-    float cb = texture(tex, warp(uv0 - vec2(a, 0.0))).b;
+    float cb = texture(tex, tube_map(tube, warp(uv0 - vec2(a, 0.0)), res, ta)).b;
     vec3  col = vec3(cr, cg, cb);
 
     // scanlines: px-true — a 1px dark line then a 1px phosphor-tinted line

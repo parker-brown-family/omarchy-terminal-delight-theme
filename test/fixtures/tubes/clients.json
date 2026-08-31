@@ -1,0 +1,29 @@
+[
+  { "class": "google-chrome", "address": "0xc1", "monitor": 1, "at": [1933, 39],
+    "size": [1054, 926], "workspace": { "id": 2, "name": "2" },
+    "mapped": true, "hidden": false, "fullscreen": 0, "focusHistoryID": 0 },
+
+  { "class": "foot", "address": "0xf1", "monitor": 0, "at": [13, 67],
+    "size": [739, 1000], "workspace": { "id": 1, "name": "1" },
+    "mapped": true, "hidden": false, "fullscreen": 0, "focusHistoryID": 1 },
+
+  { "class": "terminal-delight", "address": "0xd1", "monitor": 0, "at": [0, 0],
+    "size": [960, 540], "workspace": { "id": 1, "name": "1" },
+    "mapped": true, "hidden": false, "fullscreen": 0, "focusHistoryID": 2 },
+
+  { "class": "foot", "address": "0xf2", "monitor": 0, "at": [0, 0],
+    "size": [1920, 1080], "workspace": { "id": 1, "name": "1" },
+    "mapped": true, "hidden": false, "fullscreen": 2, "focusHistoryID": 3 },
+
+  { "class": "foot", "address": "0xf3", "monitor": 0, "at": [0, 0],
+    "size": [100, 100], "workspace": { "id": 9, "name": "9" },
+    "mapped": true, "hidden": false, "fullscreen": 0, "focusHistoryID": 4 },
+
+  { "class": "foot", "address": "0xf4", "monitor": 0, "at": [0, 0],
+    "size": [100, 100], "workspace": { "id": 1, "name": "1" },
+    "mapped": false, "hidden": false, "fullscreen": 0, "focusHistoryID": 5 },
+
+  { "class": "foot", "address": "0xf5", "monitor": 0, "at": [0, 0],
+    "size": [100, 100], "workspace": { "id": -99, "name": "special" },
+    "mapped": true, "hidden": false, "fullscreen": 0, "focusHistoryID": 6 }
+]
