@@ -509,6 +509,53 @@ assert_eq "a palette in the new home still carries its glyph" \
 assert_eq "the theme list is unmoved by any of it" \
   "$(bash "$root/bin/td-tint" --themes-json | jq 'length')" "4"
 
+echo "— td-tubes: the per-tile warp registry"
+# The registry converts Hyprland's LOGICAL window rects into the screen
+# shader's buffer space. Those are the same space only on an UNROTATED
+# monitor. On a rotated one they are 90 degrees apart, and a rect converted
+# without the rotation claims a completely different region of the screen —
+# which is exactly how a first cut ate the bar on a transform-3 display. The
+# fixture carries one of each so that can never come back silently.
+#
+# Last block on purpose: sourcing td-tubes pulls in td-monitor's `set -e` and
+# repoints TD_TEST_FIXTURES, neither of which should leak into anything above.
+export TD_TEST_FIXTURES="$here/fixtures/tubes"
+# shellcheck source=/dev/null
+source "$root/bin/td-tubes"
+set +eu
+
+tubes="$(tubes_json)"
+assert_eq "only the eligible windows get a tube" "$(jq 'length' <<<"$tubes")" "2"
+assert_eq "most-recently-focused first — the shader takes the first hit" \
+  "$(jq -r '.[0].class' <<<"$tubes")" "google-chrome"
+assert_eq "unrotated monitor: origin-shifted and scaled, nothing else" \
+  "$(jq -c '.[] | select(.class=="foot") | [.x,.y,.w,.h]' <<<"$tubes")" "[26,134,1478,2000]"
+# transform 3 against a 1920x1080 mode is (x,y) -> (1920-y, x), both corners,
+# rebuilt axis-aligned. Logical (13,39)+1054x926 therefore lands at
+# (955,13)+926x1054 — w and h swap, which is the whole point.
+assert_eq "rotated monitor: the rect is rotated into buffer space" \
+  "$(jq -c '.[] | select(.class=="google-chrome") | [.x,.y,.w,.h]' <<<"$tubes")" "[955,13,926,1054]"
+assert_lacks "terminal-delight is exempt — it warps its own panes" "$tubes" "terminal-delight"
+
+block="$(emit_block "$tubes")"
+assert_has "the baked block declares its count" "$block" "#define TUBE_COUNT 2"
+assert_has "rects are floats, not bare ints one driver would reject" "$block" \
+  "vec4(955.0, 13.0, 926.0, 1054.0)"
+assert_has "each rect carries the monitor it belongs to" "$block" "1, 0"
+assert_eq "an empty layout emits no array — GLSL forbids a zero-length one" \
+  "$(emit_block '[]' | grep -c 'TUBE_RECT')" "0"
+assert_has "…and still declares the count, so the #if drops the rest" \
+  "$(emit_block '[]')" "#define TUBE_COUNT 0"
+
+# And the frag in this repo must itself be at zero. `apply` rewrites the block
+# in the INSTALLED theme, but anyone whose checkout IS the installed theme
+# rewrites the checkout — and would commit their own window rects as what every
+# stranger gets on install. It is also the premise under which this change ships
+# no new screenshot: at zero the tube path compiles out and the picture cannot
+# have moved. Both claims, one line.
+assert_eq "the frag ships with no tubes of its own" \
+  "$(grep -c '^#define TUBE_COUNT 0$' "$root/crt-glass.frag")" "1"
+
 echo
 if [[ "$fail" -eq 0 ]]; then
   printf '\033[32mall %d green\033[0m\n' "$pass"

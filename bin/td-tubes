@@ -1,0 +1,295 @@
+#!/usr/bin/env bash
+# td-tubes — the per-tile warp registry for the monitor pass.
+#
+#   td-tubes                what would be baked right now, and why
+#   td-tubes apply          bake the live layout into the shader
+#   td-tubes off            bake zero tubes (flat desktop, glass intact)
+#   td-tubes watch          re-apply on every layout change until interrupted
+#
+# This is terminal-delight's app/src/warp.rs with a different clock. There,
+# every visible pane registers its content rect during prepaint and the CRT
+# pass warps exactly those rects; the registry is rebuilt each frame. Here the
+# tiles register on each Hyprland layout event and the monitor pass warps
+# exactly those rects.
+#
+# WHY THE MONITOR PASS AND NOT THE WINDOW SHADER. shaders/surface.frag bows a
+# window during renderWorkspace(), which runs BEFORE renderSoftwareCursorsFor()
+# composites the cursor. The picture moves; the cursor and the click do not.
+# That is not a tuning problem, it is which pass you are in — measured at
+# k1=0.14/k2=0.06 the visible content at a window's rim sits ~1.7% of its width
+# inboard of where the click lands, and ~4.25% at the corner. The monitor pass
+# runs after the cursor is in the buffer, so warping here carries cursor and
+# content together and the click lands where you aimed.
+#
+# Hyprland screen shaders take no custom uniforms, so "pass the rects in" means
+# rewriting a const block and recompiling — the trick td-monitor already uses
+# for the knob block. A few ms, no relogin.
+set -euo pipefail
+
+# td-monitor stops at its own sourcing guard, handing us family(), STAGED,
+# set_shader(), recompile() and die() rather than a second copy of each.
+TD_MONITOR="$(command -v td-monitor || true)"
+[[ -x "$TD_MONITOR" ]] || { echo "td-tubes: td-monitor not on PATH" >&2; exit 1; }
+# shellcheck source=/dev/null
+source "$TD_MONITOR"
+
+BEGIN='// ---- TUBE DATA (managed by td-tubes — do not hand-edit) ----'
+END='// ---- END TUBE DATA ----'
+
+# The shader loops over this many rects per fragment, so it is a real cost, not
+# a formality. Anything past it is DROPPED — and said out loud, because a
+# silent cap reads as "we covered everything" when we did not.
+MAX_TUBES=24
+
+need() { command -v "$1" >/dev/null || die "$1 is required"; }
+
+# THE TWO PRECONDITIONS. A tube in the monitor pass is only honest when both
+# hold, and each fails in its own visible way, so the tool sets them rather
+# than trusting anyone to remember:
+#
+#   cursor:no_hardware_cursors = 1
+#     A hardware cursor is a scanout plane the shader never touches, so the
+#     picture bends and the pointer does not — which is the drift we came here
+#     to kill. A software cursor is composited into the buffer the shader
+#     gathers from, so it bends WITH the content and the click lands.
+#
+#   debug:damage_tracking = 0
+#     The warp is a gather: the output pixel at P samples the source at
+#     tube_map(P), somewhere else. Re-blitting only a damaged rect leaves every
+#     pixel in it whose source lies outside stale — and a software cursor
+#     damages a fresh small rect every frame it moves, so it reads as tearing
+#     under mouse movement specifically. Full-frame redraw is the price of the
+#     gather. Note it is per CHANGED frame, not per vsync: an idle desktop
+#     still renders nothing.
+#
+# Both are runtime-only (`hyprctl eval`), so a `hyprctl reload` drops them —
+# which is why `watch` re-asserts on configreloaded.
+precond_set() {
+  hyprctl eval 'hl.config({ cursor = { no_hardware_cursors = 1 }, debug = { damage_tracking = 0 } })' >/dev/null
+}
+
+precond_clear() {
+  hyprctl eval 'hl.config({ cursor = { no_hardware_cursors = 2 }, debug = { damage_tracking = 2 } })' >/dev/null
+}
+
+# Report rather than assume — the point is that a wrong value is diagnosable
+# instead of being blamed on the warp.
+precond_report() {
+  local hw dt
+  hw="$(hyprctl getoption cursor:no_hardware_cursors | awk '/int:/{print $2}')"
+  dt="$(hyprctl getoption debug:damage_tracking | awk '/int:/{print $2}')"
+  [[ "$hw" == 1 ]] && echo "  cursor:no_hardware_cursors = 1  ok — the cursor rides the shader" ||
+    echo "  cursor:no_hardware_cursors = $hw  WRONG — clicks will drift again (want 1)"
+  [[ "$dt" == 0 ]] && echo "  debug:damage_tracking      = 0  ok — no stale pixels under the gather" ||
+    echo "  debug:damage_tracking      = $dt  WRONG — expect tearing on mouse movement (want 0)"
+}
+
+# Every window that should wear a tube, most-recently-focused first (the shader
+# takes the first hit, so that ordering is what makes a stacked window win the
+# pixels it covers).
+#
+# Coordinates. hyprctl reports LOGICAL, monitor-global, in the monitor's
+# rotated orientation. The screen shader runs in the compositing buffer, which
+# keeps the monitor's MODE orientation — Hyprland rotates at the final blit.
+# On an unrotated monitor those are the same space and the difference is
+# invisible; on a rotated one they are 90 degrees apart, and a rect converted
+# without the rotation claims a completely different region of the screen.
+#
+# Measured, not assumed: on a transform-3 monitor the shader's own scanlines
+# (drawn as mod(uv.y * res.y, SCAN_STEP), horizontal by construction) come out
+# VERTICAL, in a clean period-4 repeat. The buffer is landscape; the output is
+# portrait.
+#
+# The rotation below is Hyprutils' Vector2D::transform verbatim, with
+# monitorSize = the mode, which is what Hyprland passes it when it maps the
+# pointer into shader space (Renderer/OpenGL.cpp, renderToOutputInternal).
+tubes_json() {
+  need hyprctl
+  need jq
+  local mons clients
+  mons="$(hyprctl monitors -j)"
+  clients="$(hyprctl clients -j)"
+  jq -n --argjson m "$mons" --argjson c "$clients" '
+    def xf($t; $W; $H): . as [$x, $y]
+      | if   $t == 1 then [$y,      $H - $x]
+        elif $t == 2 then [$W - $x, $H - $y]
+        elif $t == 3 then [$W - $y, $x     ]
+        elif $t == 4 then [$W - $x, $y     ]
+        elif $t == 5 then [$y,      $x     ]
+        elif $t == 6 then [$x,      $H - $y]
+        elif $t == 7 then [$W - $y, $H - $x]
+        else                [$x,      $y     ] end;
+    ($m | map({ key: (.id | tostring),
+                value: { x: .x, y: .y, scale: .scale, w: .width, h: .height,
+                         t: .transform, ws: .activeWorkspace.id } })
+        | from_entries) as $mon
+    | [ $c[]
+        | select(.mapped and (.hidden | not))
+        # Terminal Delight warps its own panes and hit-tests through the same
+        # map; bending it again here would bend it twice and break the app.
+        | select(.class != "terminal-delight")
+        # A fullscreen window has no rounding and no frame to be a tube for.
+        | select(.fullscreen == 0)
+        | select(.workspace.id > 0)
+        | ($mon[.monitor | tostring]) as $mo
+        | select($mo != null and .workspace.id == $mo.ws)
+        | (((.at[0] - $mo.x) * $mo.scale)) as $x0
+        | (((.at[1] - $mo.y) * $mo.scale)) as $y0
+        | ($x0 + .size[0] * $mo.scale)     as $x1
+        | ($y0 + .size[1] * $mo.scale)     as $y1
+        # Rotate both corners, then rebuild axis-aligned: a 90-degree turn
+        # swaps which corner is the top-left, so taking min/max is what keeps
+        # w and h positive for every one of the eight transforms.
+        | ([$x0, $y0] | xf($mo.t; $mo.w; $mo.h)) as $a
+        | ([$x1, $y1] | xf($mo.t; $mo.w; $mo.h)) as $b
+        | { mon:   .monitor,
+            class: .class,
+            x: ([$a[0], $b[0]] | min),
+            y: ([$a[1], $b[1]] | min),
+            w: (($b[0] - $a[0]) | length),
+            h: (($b[1] - $a[1]) | length),
+            fh: .focusHistoryID } ]
+    | sort_by(.fh)
+  '
+}
+
+# The TUBE DATA block for a given rect list. GLSL forbids a zero-length array,
+# so an empty layout emits the count alone and the #if in the shader drops the
+# arrays, the loop and the map with it.
+emit_block() {
+  local json="$1" n
+  n="$(jq 'length' <<<"$json")"
+  echo "$BEGIN"
+  echo "#define TUBE_COUNT $n"
+  if [[ "$n" -gt 0 ]]; then
+    echo "#if TUBE_COUNT > 0"
+    echo "const vec4 TUBE_RECT[TUBE_COUNT] = vec4[TUBE_COUNT]("
+    # Explicit float literals: GLSL ES will widen an int, but a vec4 of bare
+    # ints is the kind of thing one driver accepts and the next one rejects.
+    jq -r 'def f: . * 1.0 | tostring | if test("[.]") then . else . + ".0" end;
+      to_entries | length as $n | .[] |
+      "    vec4(\(.value.x|f), \(.value.y|f), \(.value.w|f), \(.value.h|f))\(if .key == $n - 1 then "" else "," end) // \(.value.class)"' <<<"$json"
+    echo ");"
+    echo "const int  TUBE_MON[TUBE_COUNT]  = int[TUBE_COUNT]("
+    jq -r '[.[].mon | tostring] | join(", ") | "    " + .' <<<"$json"
+    echo ");"
+    echo "#endif"
+  fi
+  echo "$END"
+}
+
+# Swap the block into every installed copy of the monitor pass, but validate a
+# scratch copy FIRST so a bad rect list can never reach the live compositor.
+# Returns 1 — no error, just "nothing moved" — when the baked shader is
+# byte-identical to what is already installed. The watcher leans on that:
+# focus changes fire constantly and only matter when they reorder overlapping
+# tiles, so without this every alt-tab would pay for a shader recompile.
+bake() {
+  local json="$1"
+  local files; mapfile -t files < <(family)
+  [[ -f "$STAGED" ]] && files+=("$STAGED")
+  [[ ${#files[@]} -gt 0 ]] || die "no Terminal Delight monitor pass installed"
+
+  grep -qF "$BEGIN" "${files[0]}" || die "no TUBE DATA block in ${files[0]} — reinstall the theme"
+
+  local block probe
+  block="$(mktemp)"; probe="$(mktemp --suffix=.frag)"
+  emit_block "$json" >"$block"
+
+  awk -v b="$BEGIN" -v e="$END" -v bf="$block" '
+    index($0, b) { skip = 1; while ((getline line < bf) > 0) print line; close(bf) }
+    !skip        { print }
+    index($0, e) { skip = 0 }
+  ' "${files[0]}" >"$probe"
+
+  if command -v glslangValidator >/dev/null; then
+    glslangValidator "$probe" >/dev/null || { rm -f "$probe" "$block"; die "baked shader does not compile — nothing applied"; }
+  else
+    echo "warning: glslangValidator not installed; applying unvalidated" >&2
+  fi
+
+  if cmp -s "$probe" "${files[0]}"; then
+    rm -f "$probe" "$block"
+    return 1
+  fi
+
+  local f
+  for f in "${files[@]}"; do cp "$probe" "$f"; done
+  rm -f "$probe" "$block"
+}
+
+describe() {
+  local json="$1" n
+  n="$(jq 'length' <<<"$json")"
+  echo "$n tube(s):"
+  jq -r '.[] | "  mon \(.mon)  \(.x)x\(.y) +\(.w)x\(.h)  \(.class)"' <<<"$json"
+}
+
+# Trim to MAX_TUBES, loudly.
+cap() {
+  local json="$1" n
+  n="$(jq 'length' <<<"$json")"
+  if [[ "$n" -gt "$MAX_TUBES" ]]; then
+    echo "td-tubes: $n windows, capping at $MAX_TUBES — DROPPED:" >&2
+    jq -r ".[$MAX_TUBES:] | .[] | \"  \(.class) on mon \(.mon)\"" <<<"$json" >&2
+    jq ".[0:$MAX_TUBES]" <<<"$json"
+  else
+    printf '%s' "$json"
+  fi
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0 2>/dev/null || true; fi
+
+case "${1:-list}" in
+list)
+  describe "$(cap "$(tubes_json)")"
+  echo "preconditions:"
+  precond_report
+  ;;
+apply)
+  json="$(cap "$(tubes_json)")"
+  describe "$json"
+  precond_set
+  if bake "$json"; then recompile; else echo "unchanged — nothing recompiled"; fi
+  precond_report
+  ;;
+off)
+  precond_clear
+  if bake '[]'; then
+    echo "0 tube(s): the glass is flat"
+    recompile
+  else
+    echo "already flat"
+  fi
+  echo "  cursor and damage tracking handed back to Hyprland's defaults"
+  ;;
+watch)
+  need socat
+  sock="${XDG_RUNTIME_DIR}/hypr/${HYPRLAND_INSTANCE_SIGNATURE}/.socket2.sock"
+  [[ -S "$sock" ]] || die "no Hyprland event socket at $sock"
+  # Every event that can move a tile. There is no per-frame event for a live
+  # drag-resize, so a tube lags the drag and snaps true on release — a known
+  # edge, not a mystery.
+  echo "td-tubes: watching $sock (ctrl-c to stop)"
+  precond_set
+  json="$(cap "$(tubes_json)")"
+  if bake "$json"; then recompile >/dev/null; fi
+  socat -U - "UNIX-CONNECT:$sock" | while read -r line; do
+    # A reload re-reads the config and drops both runtime preconditions, so
+    # re-assert them there whether or not any tile actually moved.
+    [[ "${line%%>>*}" == configreloaded ]] && precond_set
+    case "${line%%>>*}" in
+    openwindow | closewindow | movewindow | movewindowv2 | changefloatingmode | fullscreen | \
+      workspace | workspacev2 | focusedmon | monitoradded | monitorremoved | activewindowv2 | configreloaded)
+      json="$(cap "$(tubes_json)")"
+      if bake "$json"; then
+        recompile >/dev/null
+        echo "td-tubes: $(jq 'length' <<<"$json") tube(s)  <- ${line%%>>*}"
+      fi
+      ;;
+    esac
+  done
+  ;;
+-h | --help | help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' ;;
+*) die "unknown command '${1}' — td-tubes [list|apply|off|watch]" ;;
+esac
