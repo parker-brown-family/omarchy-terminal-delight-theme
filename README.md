@@ -225,11 +225,26 @@ than leaving you to guess when the picture looks wrong:
   reads as tearing under mouse movement. `td-tubes` sets both, restores them on
   `off`, and re-asserts them after a `hyprctl reload` drops them.
 
-Known edges, so they are not surprises: a live drag-resize has no per-frame
-event, so a tube lags the drag and snaps true on release; the list caps at 24
-windows and says so when it drops one; and `damage_tracking = 0` costs a full
-redraw per *changed* frame, not per vsync, so an idle desktop still renders
-nothing.
+**The click lands. The reach still feels long.** Those are different things and
+it is worth separating them, because the second one reads exactly like the
+first going wrong. `test/probe-aim` measures it on your own screen — it parks
+the pointer on a target's true position and reports how far the drawn cursor
+lands from the drawn target (4.1 px against a 54 px warp displacement here, so
+aiming works). But your *hand* still travels to the true position while your
+*eye* sees the target pulled inward, by up to ~4.25% of the tile at a corner —
+about 40 px on a 900 px tile. No compositor can fix that half: Hyprland
+hit-tests raw pointer coordinates and knows nothing about the shader. The dial
+is the warp:
+
+```bash
+td-monitor set TUBE_K1 0.07 TUBE_K2 0.03    # half the bow, half the reach
+```
+
+Other known edges, so they are not surprises: a live drag-resize has no
+per-frame event, so a tube lags the drag and snaps true on release; the list
+caps at 24 windows and says so when it drops one; and `damage_tracking = 0`
+costs a full redraw per *changed* frame, not per vsync, so an idle desktop still
+renders nothing.
 
 ## Eleven terminals you can tell apart
 

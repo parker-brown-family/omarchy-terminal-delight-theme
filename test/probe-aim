@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# Does aiming work? Measure the cursor against the CONTENT, in one frame.
+#
+#   test/probe-aim [monitor]
+#
+# The claim the tubes rest on is that the cursor is composited into the buffer
+# BEFORE the screen shader, so cursor and content are displaced by one map and a
+# click lands where you aimed. That claim gets doubted from the desk — reasonably,
+# because a barrel warp near a corner moves the target ~4% of the tile and your
+# hand has to follow the TRUE position, which feels exactly like a miss.
+#
+# So this measures the thing the claim is actually about. Not the cursor against
+# a prediction — the cursor against the target, both drawn, in the same frame:
+#
+#   1. draw a bright marker in a throwaway window; find where it is DRAWN   -> D
+#   2. its TRUE position is tube_map(D), the shader's own forward gather     -> M
+#   3. park the pointer at M; find where the cursor is DRAWN                 -> P
+#   4. P == D  => aiming at what you see hits what you aimed at
+#      P == M  => the cursor is NOT warped, and the tubes are not click-correct
+#
+# THREE TRAPS, all of which produced confident wrong answers before this existed:
+#
+#   * A HOVER-REACTIVE WINDOW. Differencing two captures to find the cursor also
+#     finds anything the window repainted under it. A hover highlight is CONTENT,
+#     so it lands exactly on the barrel prediction and reads as a warped cursor
+#     while proving nothing. The probe window here runs `sleep`, and repaints for
+#     no pointer.
+#   * A HARDWARE CURSOR PLANE. It is on the panel and in no capture — a separate
+#     DRM plane is not part of the primary framebuffer that grim reads. If one is
+#     active, every number below describes a cursor you are not looking at. The
+#     preflight refuses to run in that case.
+#   * A SILENT `movecursor`. `hyprctl dispatch movecursor X Y` does nothing on
+#     0.56 (the string dispatcher form is gone), so a probe built on it measures
+#     an idle desktop. This reads the position back before trusting it.
+set -uo pipefail
+
+MON="${1:-eDP-1}"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(dirname "$here")"
+
+for c in hyprctl jq grim magick foot; do
+  command -v "$c" >/dev/null || { echo "probe-aim: $c required" >&2; exit 1; }
+done
+
+# The knobs the shader is actually compiled with, not the ones the repo ships.
+STAGED="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme/crt-glass.frag"
+[[ -f $STAGED ]] || { echo "probe-aim: no staged crt-glass.frag at $STAGED" >&2; exit 1; }
+knob() { awk -v k="$1" '$0 ~ "^const float " k "[[:space:]]*=" { gsub(/[;,]/,"",$5); print $5; exit }' "$STAGED"; }
+K1="$(knob TUBE_K1)"; K2="$(knob TUBE_K2)"
+[[ -n $K1 && -n $K2 ]] || { echo "probe-aim: could not read TUBE_K1/TUBE_K2 from $STAGED" >&2; exit 1; }
+echo "TUBE_K1=$K1  TUBE_K2=$K2  (from the staged shader)"
+
+# Preflight: a hardware cursor plane makes every capture below a fiction.
+if command -v modetest >/dev/null; then
+  hw="$(modetest -p 2>/dev/null | awk '
+    /^[0-9]+\t/ { crtc=$2; fb=$3; next }
+    /value: 2$/ && crtc != "" && crtc != "0" && fb != "0" && fb != "(0,0)" { print "yes"; exit }')"
+  [[ "$hw" == yes ]] && {
+    echo "probe-aim: a hardware cursor plane is active — it is on the panel and in" >&2
+    echo "           no capture, so nothing measured here would be the cursor you see." >&2
+    echo "           Fix with: td-tubes apply   (it sets cursor:no_hardware_cursors = 1)" >&2
+    exit 1; }
+fi
+
+ORIG="$(hyprctl cursorpos)"; OX="${ORIG%%,*}"; OY="${ORIG##*, }"
+cleanup() {
+  hyprctl dispatch "hl.dsp.cursor.move({ x = $OX, y = $OY })" >/dev/null 2>&1
+  local a; a="$(hyprctl clients -j | jq -r '.[] | select(.class=="tdaim") | .address')"
+  [[ -n $a ]] && hyprctl dispatch "hl.dsp.window.close({ window = \"address:$a\" })" >/dev/null 2>&1
+  rm -f /tmp/tdaim-inner.sh
+  return 0
+}
+trap cleanup EXIT
+
+warp() {
+  hyprctl dispatch "hl.dsp.cursor.move({ x = $1, y = $2 })" >/dev/null 2>&1
+  local got; got="$(hyprctl cursorpos)"
+  [[ "$got" == "$1, $2" ]] || {
+    echo "probe-aim: asked for $1,$2 and the pointer is at '$got'." >&2
+    echo "           A sweep that does not move measures an idle desktop. Stopping." >&2
+    exit 1; }
+}
+
+# Reverse-video block, top-left of the text area. Bright, small, and the window
+# runs `sleep` so nothing in it reacts to the pointer.
+cat >/tmp/tdaim-inner.sh <<'SH'
+printf '\033[2J\033[H\033[7m  \033[0m'
+exec sleep 300
+SH
+hyprctl dispatch 'hl.window_rule({ match = { class = "^tdaim$" }, float = true, size = "900 700" })' >/dev/null 2>&1
+hyprctl dispatch 'hl.dsp.exec_cmd("foot -a tdaim bash /tmp/tdaim-inner.sh")' >/dev/null 2>&1
+sleep 3.5
+
+read -r WX WY WW WH < <(hyprctl clients -j |
+  jq -r '.[] | select(.class=="tdaim") | "\(.at[0]) \(.at[1]) \(.size[0]) \(.size[1])"')
+[[ -n ${WX:-} ]] || { echo "probe-aim: the probe window never appeared" >&2; exit 1; }
+read -r MX MY MS < <(hyprctl -j monitors | jq -r --arg m "$MON" '.[] | select(.name==$m) | "\(.x) \(.y) \(.scale)"')
+[[ -n ${MX:-} ]] || { echo "probe-aim: no monitor called $MON" >&2; exit 1; }
+sleep 2   # let the watcher re-bake for the new window
+
+px() { awk -v v="$1" -v m="$2" -v s="$MS" 'BEGIN{printf "%.1f",(v-m)*s}'; }
+rx="$(px "$WX" "$MX")"; ry="$(px "$WY" "$MY")"
+rw="$(awk -v v="$WW" -v s="$MS" 'BEGIN{printf "%.1f",v*s}')"
+rh="$(awk -v v="$WH" -v s="$MS" 'BEGIN{printf "%.1f",v*s}')"
+echo "probe window: logical $WX,$WY ${WW}x${WH}   tube rect: $rx,$ry ${rw}x${rh} (capture px)"
+
+# 1. where the marker is DRAWN — brightest blob inside the window's rect
+warp "$OX" "$OY"; sleep 0.5
+grim -o "$MON" /tmp/aim-marker.png
+read -r DX DY < <(magick /tmp/aim-marker.png -crop "${rw%.*}x${rh%.*}+${rx%.*}+${ry%.*}" +repage \
+  -colorspace gray -threshold 55% -define connected-components:verbose=true \
+  -define connected-components:area-threshold=60 -connected-components 8 null: 2>&1 |
+  awk -v rx="${rx%.*}" -v ry="${ry%.*}" 'NR>1 && $NF=="gray(255)" {
+        split($3,c,","); if ($4+0>best) { best=$4+0; bx=c[1]+rx; by=c[2]+ry } }
+      END { printf "%.1f %.1f", bx, by }')
+[[ -n ${DX:-} ]] || { echo "probe-aim: could not find the marker" >&2; exit 1; }
+
+# 2. its TRUE position — the shader's own forward gather, no solver to get wrong
+read -r TX TY < <(awk -v px="$DX" -v py="$DY" -v rx="$rx" -v ry="$ry" -v rw="$rw" -v rh="$rh" \
+  -v k1="$K1" -v k2="$K2" 'BEGIN{
+    cx=(px-rx)/rw-0.5; cy=(py-ry)/rh-0.5; r2=cx*cx+cy*cy; f=1+k1*r2+k2*r2*r2;
+    printf "%.1f %.1f", rx+(0.5+cx*f)*rw, ry+(0.5+cy*f)*rh }')
+
+# 3. park the pointer on that true position and find where the cursor is drawn
+LX="$(awk -v v="$TX" -v m="$MX" -v s="$MS" 'BEGIN{printf "%d", v/s+m}')"
+LY="$(awk -v v="$TY" -v m="$MY" -v s="$MS" 'BEGIN{printf "%d", v/s+m}')"
+warp "$LX" "$LY"; sleep 1
+grim -o "$MON" /tmp/aim-cursor.png
+warp $((LX - 400)) $((LY + 400)); sleep 1
+grim -o "$MON" /tmp/aim-away.png
+read -r PX PY < <(magick /tmp/aim-cursor.png /tmp/aim-away.png -compose difference -composite \
+  -colorspace gray -threshold 12% -morphology close disk:2 \
+  -define connected-components:verbose=true -define connected-components:area-threshold=40 \
+  -connected-components 8 null: 2>&1 |
+  awk -v tx="$TX" -v ty="$TY" 'NR>1 && $NF!="gray(0)" {
+        split($3,c,","); d=(c[1]-tx)^2+(c[2]-ty)^2
+        if (best=="" || d<best) { best=d; bx=c[1]; by=c[2] } }
+      END { printf "%.1f %.1f", bx, by }')
+[[ -n ${PX:-} ]] || { echo "probe-aim: could not find the cursor" >&2; exit 1; }
+
+printf '\n  marker DRAWN at   %s,%s\n  marker TRUE at    %s,%s   (tube_map of the drawn position)\n' \
+  "$DX" "$DY" "$TX" "$TY"
+printf '  cursor DRAWN at   %s,%s   (pointer parked on the marker TRUE position)\n\n' "$PX" "$PY"
+
+# A few px of residual is expected and means nothing: these are blob centroids,
+# and a cursor's hotspot is its tip, not its centre. The verdict is the RATIO —
+# alignment error against the warp displacement it would have to explain.
+awk -v px="$PX" -v py="$PY" -v dx="$DX" -v dy="$DY" -v tx="$TX" -v ty="$TY" 'BEGIN{
+  ax=px-dx; ay=py-dy; a=sqrt(ax*ax+ay*ay)
+  wx=dx-tx; wy=dy-ty; w=sqrt(wx*wx+wy*wy)
+  printf "  cursor - drawn marker : %6.1f,%-6.1f  |%.1f px|   <- aiming error\n", ax, ay, a
+  printf "  warp displacement here: %6.1f,%-6.1f  |%.1f px|   <- what a miss would look like\n\n", wx, wy, w
+  if (w < 8) { print "  INCONCLUSIVE: too little warp at this spot to tell the two apart."; exit }
+  if (a < w/3) printf "  VERDICT: the cursor rides the warp — aiming at what you see works.\n           Error is %.0f%% of the displacement.\n", 100*a/w
+  else         printf "  VERDICT: the cursor does NOT ride the warp — clicks will miss by ~%.0f px\n           near a corner, outward from where the target appears.\n", w
+  print ""
+  print "  Either way your HAND still travels to the true position, which is what"
+  print "  makes a correct warp feel wrong at a corner. Lower it with:"
+  print "      td-monitor set TUBE_K1 0.07 TUBE_K2 0.03" }'
+
+cx=$(awk -v a="$DX" -v b="$TX" 'BEGIN{printf "%d",(a+b)/2-260}')
+cy=$(awk -v a="$DY" -v b="$TY" 'BEGIN{printf "%d",(a+b)/2-200}')
+magick /tmp/aim-cursor.png -crop "520x400+${cx}+${cy}" +repage -resize 200% /tmp/aim-crop.png 2>/dev/null &&
+  echo "  picture of it: /tmp/aim-crop.png"
