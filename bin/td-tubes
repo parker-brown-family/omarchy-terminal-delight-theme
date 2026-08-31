@@ -189,13 +189,21 @@ tubes_json() {
   mons="$(hyprctl monitors -j 2>/dev/null)"
   clients="$(hyprctl clients -j 2>/dev/null)"
   layers="$(hyprctl layers -j 2>/dev/null)"
-  # hyprctl prints NOTHING when it cannot reach a compositor — over ssh without
-  # the session environment, or from a unit that starts before the session is
-  # up. Empty is not JSON, and `--argjson` answers that with a jq usage dump
-  # that says nothing whatsoever about the real problem. Say it here instead.
-  [[ -n $mons && -n $clients ]] ||
-    die "cannot reach Hyprland — no monitors or clients came back. Is a session running, and is HYPRLAND_INSTANCE_SIGNATURE set?"
-  [[ -n $layers ]] || layers='{}'
+  # When hyprctl cannot reach a compositor — over ssh without the session
+  # environment, or from a unit that starts before the session is up — it does
+  # not fail and it does not stay quiet. It prints a SENTENCE on stdout:
+  #
+  #     HYPRLAND_INSTANCE_SIGNATURE not set! (is hyprland running?)
+  #
+  # which is neither empty nor JSON, so a non-empty check sails past it and
+  # `--argjson` answers with a jq usage dump that sends the reader into jq
+  # instead of into their session. Test for PARSEABLE, not for present, and
+  # quote what hyprctl actually said.
+  json_ok() { jq -e . >/dev/null 2>&1 <<<"${1:-}"; }
+  if ! json_ok "$mons" || ! json_ok "$clients"; then
+    die "cannot reach Hyprland — hyprctl said: $(head -1 <<<"${mons:-nothing at all}")"
+  fi
+  json_ok "$layers" || layers='{}'
   jq -n --argjson m "$mons" --argjson c "$clients" --argjson l "$layers" '
     def xf($t; $W; $H): . as [$x, $y]
       | if   $t == 1 then [$y,      $H - $x]
