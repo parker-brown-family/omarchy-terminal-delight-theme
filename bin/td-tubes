@@ -84,6 +84,76 @@ precond_report() {
     echo "  debug:damage_tracking      = $dt  WRONG — expect tearing on mouse movement (want 0)"
 }
 
+# The two pieces of state that decide whether the tubes are TRUE, as opposed to
+# merely present. Both were invisible until they produced artefacts nobody could
+# name, so both are reported next to the preconditions now.
+#
+# THE WATCHER. `apply` bakes a snapshot. A tube is a rect, and a rect is only
+# right until the next window opens, closes or moves — which is constantly. With
+# no watcher the shader keeps warping through rects for a layout that is gone,
+# and because tube_at() picks the tube by OUTPUT pixel, two things that used to
+# share a map stop sharing one: the pointer lands in one dead rect while the
+# button it is aimed at lands in another, or in none. That reads as three
+# separate bugs — content tiled onto the wrong tiles, duplicated fragments of
+# one window inside another, and clicks that miss — and it is one.
+watcher_running() { pgrep -f 'td-tubes watch' >/dev/null 2>&1; }
+
+# Hyprland's event socket, without requiring Hyprland's environment.
+# `HYPRLAND_INSTANCE_SIGNATURE` is exported into the session's processes, and a
+# systemd user unit is not one of them unless something imported the
+# environment first — so the unit would die on an unbound variable and the
+# whole point of shipping a unit would be lost. Fall back to the one live
+# instance under $XDG_RUNTIME_DIR, and refuse rather than guess if there are
+# several: picking the wrong compositor silently is worse than not starting.
+SOCK_ERR=""
+hypr_event_socket() {
+  local base="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr"
+  local sig="${HYPRLAND_INSTANCE_SIGNATURE:-}" s found=()
+  if [[ -n $sig && -S "$base/$sig/.socket2.sock" ]]; then
+    echo "$base/$sig/.socket2.sock"
+    return 0
+  fi
+  for s in "$base"/*/.socket2.sock; do [[ -S $s ]] && found+=("$s"); done
+  case ${#found[@]} in
+  1) echo "${found[0]}" ;;
+  0)
+    SOCK_ERR="no Hyprland event socket under $base — is Hyprland running?"
+    return 1
+    ;;
+  *)
+    SOCK_ERR="${#found[@]} Hyprland instances under $base — set HYPRLAND_INSTANCE_SIGNATURE to pick one"
+    return 1
+    ;;
+  esac
+}
+
+# THE OTHER WARP. shaders/surface.frag bows each window during renderWorkspace().
+# The tubes exist precisely because that pass cannot be click-correct (see the
+# header). Running both does not average out: content is displaced twice and the
+# cursor once, so the miss the tubes were built to remove comes straight back.
+window_warp_dir() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/hypr/shaders"; }
+window_warp_live() { [[ -f "$(window_warp_dir)/surface.frag" ]]; }
+
+state_report() {
+  if watcher_running; then
+    echo "  watcher                         ok — tubes follow the layout"
+  else
+    echo "  watcher                         NOT RUNNING — these rects are a snapshot and"
+    echo "                                  rot on the next layout change. Start it with:"
+    echo "                                    systemctl --user enable --now td-tubes.service"
+    echo "                                  (or run 'td-tubes watch' in a spare terminal)"
+  fi
+  if window_warp_live; then
+    echo "  per-window warp                 CONFLICT — $(window_warp_dir)/surface.frag is"
+    echo "                                  installed and bows every window a second time."
+    echo "                                  Content moves twice, the cursor once, and the"
+    echo "                                  clicks drift again. ./install-curve.sh --tubes"
+    echo "                                  moves it aside reversibly."
+  else
+    echo "  per-window warp                 off — the tubes are the only curve on a window"
+  fi
+}
+
 # Every window that should wear a tube, most-recently-focused first (the shader
 # takes the first hit, so that ordering is what makes a stacked window win the
 # pixels it covers).
@@ -245,6 +315,7 @@ list)
   describe "$(cap "$(tubes_json)")"
   echo "preconditions:"
   precond_report
+  state_report
   ;;
 apply)
   json="$(cap "$(tubes_json)")"
@@ -252,6 +323,7 @@ apply)
   precond_set
   if bake "$json"; then recompile; else echo "unchanged — nothing recompiled"; fi
   precond_report
+  state_report
   ;;
 off)
   precond_clear
@@ -265,8 +337,7 @@ off)
   ;;
 watch)
   need socat
-  sock="${XDG_RUNTIME_DIR}/hypr/${HYPRLAND_INSTANCE_SIGNATURE}/.socket2.sock"
-  [[ -S "$sock" ]] || die "no Hyprland event socket at $sock"
+  sock="$(hypr_event_socket)" || die "$SOCK_ERR"
   # Every event that can move a tile. There is no per-frame event for a live
   # drag-resize, so a tube lags the drag and snaps true on release — a known
   # edge, not a mystery.

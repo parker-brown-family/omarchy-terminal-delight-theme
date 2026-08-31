@@ -1,0 +1,32 @@
+[Unit]
+# The tubes are only correct while something re-bakes them. `td-tubes apply` is
+# a snapshot: a tube is a rect, and a rect stops being true the next time a
+# window opens, closes or moves. Without this unit the shader keeps warping
+# through rects for a layout that no longer exists, which shows up as content
+# tiled onto the wrong tiles, fragments of one window inside another, and
+# clicks that miss — three symptoms, one cause.
+Description=Terminal Delight — keep the per-tile CRT tubes in step with the layout
+Documentation=https://github.com/parker-brown-family/omarchy-terminal-delight-theme
+PartOf=graphical-session.target
+After=graphical-session.target
+# Nothing to watch without a compositor, and nothing to do on a text console.
+ConditionEnvironment=XDG_RUNTIME_DIR
+
+[Service]
+Type=simple
+# Absolute path, written in by install-curve.sh: this repo does not put its
+# binaries on PATH, and a unit that assumes it did would fail for anyone who
+# installed the theme the documented way.
+ExecStart=@TD_TUBES@ watch
+ExecStopPost=-@TD_TUBES@ off
+# The watcher is a socat pipe against Hyprland's event socket; if the
+# compositor restarts, the pipe ends and this should come back with it. The
+# burst limit is what stops a genuinely broken install (no socat, no socket)
+# from spinning forever instead of failing visibly in the journal.
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=graphical-session.target

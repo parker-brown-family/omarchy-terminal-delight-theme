@@ -161,6 +161,45 @@ else
   no "--uninstall left the block behind"
 fi
 
+echo "— the other tier: --tubes, which must not leave both warps installed"
+# systemctl is stubbed HERE and not with the others above because it is the one
+# command in this file that could reach the REAL user manager: `--user enable
+# --now` talks to it over D-Bus, and the manager reads its own environment, not
+# this sandbox's. An unstubbed run could start the caller's live service.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/systemctl.log"\nexit 0\n' \
+  "$T/log" >"$T/stubs/systemctl"
+chmod +x "$T/stubs/systemctl"
+
+shaders="$HOME/.config/hypr/shaders"
+mkdir -p "$shaders"
+printf 'pretend this is the users own\n' >"$shaders/surface.frag"
+tubes_out="$(bash "$theme/install-curve.sh" --tubes 2>&1)"
+
+if [[ ! -f "$shaders/surface.frag" && -f "$shaders/disabled-by-td-tubes/surface.frag" ]]; then
+  ok "--tubes moved the per-window warp aside — one curve per window, not two"
+else
+  no "--tubes left surface.frag installed: content would bow twice, the cursor once"
+  printf '%s\n' "$tubes_out" | sed 's/^/      /'
+fi
+
+unit="$HOME/.config/systemd/user/td-tubes.service"
+if [[ -f $unit ]] && ! grep -q '@TD_TUBES@' "$unit" && grep -q 'td-tubes watch' "$unit"; then
+  ok "…and wrote the watcher unit with a real path baked in, not the placeholder"
+else
+  no "the watcher unit is missing or still carries @TD_TUBES@ — tubes would rot silently"
+fi
+grep -q 'enable --now td-tubes.service' "$T/log/systemctl.log" 2>/dev/null &&
+  ok "…and asked systemd to enable it" ||
+  no "the unit was written but never enabled"
+
+# The user's own file was MOVED, not deleted, so uninstall owes it back.
+if bash "$theme/install-curve.sh" --uninstall >/dev/null 2>&1 &&
+   [[ -f "$shaders/surface.frag" && ! -f "$shaders/disabled-by-td-tubes/surface.frag" ]]; then
+  ok "…and --uninstall gives the user their own shader back"
+else
+  no "--uninstall kept a file it did not create"
+fi
+
 echo "— the README's install instructions, against what just happened"
 # The menu path (Super + Space -> Install -> Style -> Theme) and the CLI are
 # the same script; a reader needs at least one of them named, and the CLI is

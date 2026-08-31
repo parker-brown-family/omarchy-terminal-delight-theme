@@ -178,10 +178,58 @@ Three things worth knowing before you install it:
 - **Hit-testing stays flat.** Near a window's edge the visible content sits up
   to about 2% of the window's size inward of where your cursor actually
   clicks. Middles are fine; corners of a tightly-packed UI are not. Turn
-  `TD_K1`/`TD_K2` down in `shaders/surface.frag` if it bothers you.
+  `TD_K1`/`TD_K2` down in `shaders/surface.frag` if it bothers you — or use
+  the tubes below, which do not have this problem at all.
 - **Terminal Delight itself is exempt.** The app warps its own panes, so the
   theme pins its window class to `rounding = 0` — otherwise it gets bent
   twice.
+
+## The tubes: the same curve, but the click lands
+
+The bullet above is not a tuning problem, and no value of `TD_K1` fixes it. It
+is which rendering pass you are in. `shaders/surface.frag` bows a window during
+`renderWorkspace()`, which runs *before* Hyprland composites the cursor into the
+same buffer — so the picture moves and the pointer does not. Nothing drawn there
+can ever agree with the click.
+
+Hyprland's **monitor pass** runs after the cursor is in the buffer. Warp there
+and the cursor rides the same map as the content: put the pointer on what you
+see, and the click lands on it. That is what `td-tubes` does — one tube per
+tile, baked into `crt-glass.frag` as constants, recompiled when the layout
+changes.
+
+```bash
+./install-curve.sh --tubes    # instead of the plain install
+td-tubes                      # what would be baked now, and the state it needs
+```
+
+Pick one tier. Running both bows every window twice while the cursor is bowed
+once, which brings the drift straight back — so `--tubes` moves the per-window
+shaders into `shaders/disabled-by-td-tubes/`, and `--uninstall` puts them back.
+
+**The tubes need two things running, and `td-tubes` reports on both** rather
+than leaving you to guess when the picture looks wrong:
+
+- **A watcher.** `td-tubes apply` bakes a *snapshot*. A tube is a rect, and a
+  rect stops being true the next time a window opens, closes or moves. The
+  installer enables `td-tubes.service` for this; without it the shader keeps
+  warping through rects for a layout that is gone, and because a tube is chosen
+  by output pixel, the pointer and the thing it is aimed at can end up in
+  different dead rects. That looks like three bugs — tiles drawn onto the wrong
+  tiles, fragments of one window inside another, clicks that miss — and it is
+  one.
+- **Two runtime settings**, `cursor:no_hardware_cursors = 1` and
+  `debug:damage_tracking = 0`. A gather-warp samples the source somewhere other
+  than the output pixel, so re-blitting only a damaged rect leaves stale pixels
+  inside it; with a software cursor damaging a fresh rect every frame, that
+  reads as tearing under mouse movement. `td-tubes` sets both, restores them on
+  `off`, and re-asserts them after a `hyprctl reload` drops them.
+
+Known edges, so they are not surprises: a live drag-resize has no per-frame
+event, so a tube lags the drag and snaps true on release; the list caps at 24
+windows and says so when it drops one; and `damage_tracking = 0` costs a full
+redraw per *changed* frame, not per vsync, so an idle desktop still renders
+nothing.
 
 ## Eleven terminals you can tell apart
 

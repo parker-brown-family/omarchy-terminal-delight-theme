@@ -105,6 +105,18 @@ fi
 # ------------------------------------------------------------------- curve ---
 head_ "the curve — ./install-curve.sh"
 warp="$CONFIG/hypr/shaders/surface.frag"
+
+# Which tier is installed decides what "missing" MEANS. On the tubes tier the
+# per-window warp is supposed to be absent, and calling that a fault would have
+# the doctor prescribe the exact thing that breaks it — both warps at once,
+# content bowed twice, cursor once. Detected before the checks that depend on it.
+UNIT_FILE="$CONFIG/systemd/user/td-tubes.service"
+baked=""
+[[ -f "$STAGED/crt-glass.frag" ]] &&
+  baked="$(awk '/^#define TUBE_COUNT/ { print $3; exit }' "$STAGED/crt-glass.frag")"
+TUBES_TIER=0
+[[ -f $UNIT_FILE || ${baked:-0} != 0 ]] && TUBES_TIER=1
+
 if [[ -f $warp ]] && grep -q terminal-delight "$warp"; then
   ok "the per-window warp is installed"
   if [[ $HYPR -eq 1 ]]; then
@@ -120,6 +132,8 @@ if [[ -f $warp ]] && grep -q terminal-delight "$warp"; then
 elif [[ -f $warp ]]; then
   err "something else owns surface.frag" "$warp has no terminal-delight marker" \
       "./install-curve.sh"
+elif [[ $TUBES_TIER -eq 1 ]]; then
+  note "the per-window warp is absent because the tubes tier owns the curve — correct here"
 else
   err "the per-window warp is NOT installed — no window is bowed or glared" \
       "$warp is missing" \
@@ -182,6 +196,48 @@ else
   err "$leftovers leftover variant theme(s) are polluting the grid" \
       "palettes stopped being themes in v0.2.0" \
       "./install-variants.sh   # it retires them"
+fi
+
+# ---------------------------------------------------------------- the tubes ---
+# Opt-in tier, so absence is a note and never a failure. What IS a failure is
+# having it installed and not true: the README promises clicks that land, and
+# that promise rests on state nothing else checks. All three of these went
+# wrong on the author's box at once and presented as three unrelated bugs.
+head_ "the tubes (optional — ./install-curve.sh --tubes)"
+if [[ $TUBES_TIER -eq 0 ]]; then
+  note "not installed — the per-window warp is the other tier, and it is fine on its own"
+else
+  if pgrep -f 'td-tubes watch' >/dev/null 2>&1; then
+    ok "the watcher is running — tile rects follow the layout"
+  else
+    err "the tubes are installed but nothing is watching the layout" \
+        "baked rects are a snapshot; they rot on the next window open/close/move" \
+        "systemctl --user enable --now td-tubes.service"
+  fi
+
+  # Both tiers at once is the one combination that is worse than either: the
+  # content is bowed twice and the cursor once, so the drift the tubes remove
+  # comes back. This is the check that would have caught it by name.
+  if [[ -f "$CONFIG/hypr/shaders/surface.frag" ]]; then
+    err "the per-window warp is installed alongside the tubes" \
+        "windows are bowed twice, the cursor once — clicks will miss again" \
+        "./install-curve.sh --tubes"
+  else
+    ok "the per-window warp is out of the way — one curve per window"
+  fi
+
+  if [[ $HYPR -eq 1 ]]; then
+    [[ "$(getopt_int cursor:no_hardware_cursors)" == 1 ]] &&
+      ok "cursor:no_hardware_cursors = 1 — the cursor rides the shader" ||
+      err "cursor:no_hardware_cursors is not 1" \
+          "a hardware cursor does not go through the warp, so clicks drift" \
+          "td-tubes apply"
+    [[ "$(getopt_int debug:damage_tracking)" == 0 ]] &&
+      ok "debug:damage_tracking = 0 — no stale pixels under the gather" ||
+      err "debug:damage_tracking is not 0" \
+          "a gather-warp re-blitting a damaged rect leaves stale pixels — reads as tearing" \
+          "td-tubes apply"
+  fi
 fi
 
 # ------------------------------------------------------------ Terminal Paint ---
