@@ -201,11 +201,15 @@ if [[ -n $TUBES ]]; then
   # file-based and will cheerfully report "off" while the warp is on the screen.
   if $moved; then
     echo
-    echo "  NOTE: the running Hyprland still has the old shader compiled in, and"
-    echo "        neither the move above nor the reload below drops it. Until you"
-    echo "        LOG OUT, windows are warped twice — once by that shader and once"
-    echo "        by the tubes — and clicks will land off by the first warp."
-    echo "        Verify with: test/probe-warp-count"
+    echo "  NOTE: the running Hyprland still has that shader compiled in, and"
+    echo "        neither the move above nor the reload below drops it — a window"
+    echo "        shader is loaded once, at login. So nothing changes on screen"
+    echo "        this session: you keep the old per-window curve until you LOG"
+    echo "        OUT, and the tubes are enabled for the NEXT session precisely so"
+    echo "        the two never run at once. Running both would bow every window"
+    echo "        twice while the cursor followed only one, which is the drift the"
+    echo "        tubes exist to remove. After logging back in, confirm a single"
+    echo "        warp with: test/probe-warp-count"
   fi
 else
   for f in surface.frag ext.frag; do
