@@ -32,11 +32,18 @@
 #   * A SILENT `movecursor`. `hyprctl dispatch movecursor X Y` does nothing on
 #     0.56 (the string dispatcher form is gone), so a probe built on it measures
 #     an idle desktop. This reads the position back before trusting it.
+#   * MOVING THE POINTER TO ISOLATE IT. The obvious way to find the cursor is to
+#     photograph it in two places and subtract — and it is wrong here. Moving the
+#     pointer out of a window changes focus, which changes the border and the
+#     window opacity, and fires activewindowv2, which makes td-tubes re-bake and
+#     RE-WARP THE WHOLE SCREEN. The difference image is then mostly not the
+#     cursor, and picking a blob out of it gave this probe two opposite verdicts
+#     on consecutive runs. So the pointer never moves between the two frames
+#     here: it is parked once and allowed to IDLE OUT via cursor:inactive_timeout,
+#     so the only thing that differs between the frames is the cursor itself.
 set -uo pipefail
 
 MON="${1:-eDP-1}"
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-root="$(dirname "$here")"
 
 for c in hyprctl jq grim magick foot; do
   command -v "$c" >/dev/null || { echo "probe-aim: $c required" >&2; exit 1; }
@@ -64,6 +71,9 @@ fi
 
 ORIG="$(hyprctl cursorpos)"; OX="${ORIG%%,*}"; OY="${ORIG##*, }"
 cleanup() {
+  # Hand back the cursor timeout even on a failure path — leaving a desktop
+  # whose pointer vanishes after one second is a nasty thing to walk away from.
+  hyprctl eval "hl.config({ cursor = { inactive_timeout = ${OLD_TIMEOUT:-0} } })" >/dev/null 2>&1
   hyprctl dispatch "hl.dsp.cursor.move({ x = $OX, y = $OY })" >/dev/null 2>&1
   local a; a="$(hyprctl clients -j | jq -r '.[] | select(.class=="tdaim") | .address')"
   [[ -n $a ]] && hyprctl dispatch "hl.dsp.window.close({ window = \"address:$a\" })" >/dev/null 2>&1
@@ -104,8 +114,21 @@ rw="$(awk -v v="$WW" -v s="$MS" 'BEGIN{printf "%.1f",v*s}')"
 rh="$(awk -v v="$WH" -v s="$MS" 'BEGIN{printf "%.1f",v*s}')"
 echo "probe window: logical $WX,$WY ${WW}x${WH}   tube rect: $rx,$ry ${rw}x${rh} (capture px)"
 
-# 1. where the marker is DRAWN — brightest blob inside the window's rect
-warp "$OX" "$OY"; sleep 0.5
+# Borrowed from bin/shoot-theme: the compositor composites a cursor until it is
+# told the pointer has gone idle. That is how both frames below are taken from
+# one pointer position — no movement, so no focus change and no re-bake.
+# float:, not int: — reading it as an int yields the empty string, which then
+# defaults to 0 and RESTORES "never hide" over whatever the user had set.
+# bin/shoot-theme had the same bug and its comment asserted the int.
+OLD_TIMEOUT="$(hyprctl getoption cursor:inactive_timeout 2>/dev/null |
+  awk '/^(int|float):/ { print $2; exit }')"
+OLD_TIMEOUT="${OLD_TIMEOUT:-0}"
+restore_timeout() { hyprctl eval "hl.config({ cursor = { inactive_timeout = $OLD_TIMEOUT } })" >/dev/null 2>&1; }
+hyprctl eval 'hl.config({ cursor = { inactive_timeout = 1 } })' >/dev/null 2>&1
+
+# 1. where the marker is DRAWN — brightest blob inside the window's rect, taken
+#    with the pointer parked well clear of it and idled out.
+warp $((WX + WW / 2)) $((WY + WH * 4 / 5)); sleep 3
 grim -o "$MON" /tmp/aim-marker.png
 read -r DX DY < <(magick /tmp/aim-marker.png -crop "${rw%.*}x${rh%.*}+${rx%.*}+${ry%.*}" +repage \
   -colorspace gray -threshold 55% -define connected-components:verbose=true \
@@ -124,19 +147,35 @@ read -r TX TY < <(awk -v px="$DX" -v py="$DY" -v rx="$rx" -v ry="$ry" -v rw="$rw
 # 3. park the pointer on that true position and find where the cursor is drawn
 LX="$(awk -v v="$TX" -v m="$MX" -v s="$MS" 'BEGIN{printf "%d", v/s+m}')"
 LY="$(awk -v v="$TY" -v m="$MY" -v s="$MS" 'BEGIN{printf "%d", v/s+m}')"
-warp "$LX" "$LY"; sleep 1
+# Awake frame: timeout off so the pointer cannot vanish mid-capture, and a beat
+# for it to be composited — firing grim the instant after the warp caught neither
+# a visible cursor nor a hidden one, and an empty difference reads identically to
+# "nothing moved".
+hyprctl eval 'hl.config({ cursor = { inactive_timeout = 0 } })' >/dev/null 2>&1
+warp "$LX" "$LY"; sleep 0.8
 grim -o "$MON" /tmp/aim-cursor.png
-warp $((LX - 400)) $((LY + 400)); sleep 1
-grim -o "$MON" /tmp/aim-away.png
-read -r PX PY < <(magick /tmp/aim-cursor.png /tmp/aim-away.png -compose difference -composite \
+# Idle frame: same pointer position, cursor allowed to hide. Nothing else differs.
+hyprctl eval 'hl.config({ cursor = { inactive_timeout = 1 } })' >/dev/null 2>&1
+sleep 3
+grim -o "$MON" /tmp/aim-idle.png
+restore_timeout
+
+# The pointer did not move between those two frames, so the ONLY difference is
+# the cursor. No proximity tie-break, and therefore no way to bias the answer
+# toward the hypothesis being tested: take the largest blob, whatever it is.
+# CROPPED to the probe window. The rest of the desktop is somebody's live
+# terminal repainting itself, and over a whole monitor those blobs are bigger
+# than a cursor — taking the largest blob monitor-wide is what produced the
+# second, opposite verdict. Inside this window nothing moves but the pointer.
+read -r PX PY < <(magick /tmp/aim-cursor.png /tmp/aim-idle.png -compose difference -composite \
+  -crop "${rw%.*}x${rh%.*}+${rx%.*}+${ry%.*}" +repage \
   -colorspace gray -threshold 12% -morphology close disk:2 \
   -define connected-components:verbose=true -define connected-components:area-threshold=40 \
   -connected-components 8 null: 2>&1 |
-  awk -v tx="$TX" -v ty="$TY" 'NR>1 && $NF!="gray(0)" {
-        split($3,c,","); d=(c[1]-tx)^2+(c[2]-ty)^2
-        if (best=="" || d<best) { best=d; bx=c[1]; by=c[2] } }
-      END { printf "%.1f %.1f", bx, by }')
-[[ -n ${PX:-} ]] || { echo "probe-aim: could not find the cursor" >&2; exit 1; }
+  awk -v rx="${rx%.*}" -v ry="${ry%.*}" 'NR>1 && $NF!="gray(0)" {
+        split($3,c,","); if ($4+0>best) { best=$4+0; bx=c[1]+rx; by=c[2]+ry } }
+      END { if (best!="") printf "%.1f %.1f", bx, by }')
+[[ -n ${PX:-} ]] || { echo "probe-aim: could not find the cursor (did it fail to idle out?)" >&2; exit 1; }
 
 printf '\n  marker DRAWN at   %s,%s\n  marker TRUE at    %s,%s   (tube_map of the drawn position)\n' \
   "$DX" "$DY" "$TX" "$TY"

@@ -29,9 +29,13 @@ need() { command -v "$1" >/dev/null || { echo "need $1" >&2; exit 1; }; }
 for c in hyprctl grim magick jq foot nvim; do need "$c"; done
 
 HOME_WS="$(hyprctl activeworkspace -j | jq -r '.id')"
-# `hyprctl getoption` reports an int; 0 means "never hide", which is the
-# default and the reason every shot so far had a pointer in it.
-OLD_TIMEOUT="$(hyprctl getoption cursor:inactive_timeout 2>/dev/null | awk '/^int:/ { print $2; exit }')"
+# 0 means "never hide", which is the default and the reason every shot so far
+# had a pointer in it. It is reported as a FLOAT, not an int — this read matched
+# `^int:` and so always came back empty, fell through to 0, and "restored" never
+# hide over whatever had been set. Harmless while the default is 0; a silent
+# clobber for anyone who had set one.
+OLD_TIMEOUT="$(hyprctl getoption cursor:inactive_timeout 2>/dev/null |
+  awk '/^(int|float):/ { print $2; exit }')"
 OLD_TIMEOUT="${OLD_TIMEOUT:-0}"
 
 cleanup() {
