@@ -121,6 +121,29 @@ focus all live — and are tested — in exactly one place.
   runs after the cursor is in the buffer, which is why the tubes live there
   (`td-tubes`). Same reason Terminal Delight's own CRT pass is honest — see
   `warp_screen_to_content`, app/src/pane.rs.
+- **The monitor-pass cursor DOES ride the warp — measured three ways, because
+  the claim gets doubted from the desk and reasonably so.** `test/probe-aim`
+  parks the pointer on a marker's true position and measures where the cursor
+  and the marker are each *drawn*, in one frame: 4.1 px apart against a 54 px
+  warp displacement (8%). Corroborated by the KMS scanout with
+  `gpu-screen-recorder -cursor no` — which draws nothing of its own, so the
+  cursor appearing there at the barrel-mapped position proves it is in the
+  primary framebuffer — and by `modetest -p`, which showed every Cursor-type
+  plane at `crtc=0 fb=0`, i.e. no hardware cursor plane at all.
+  **Three traps sit around this measurement**, each of which produced a
+  confident wrong answer first: a hover-reactive window repaints CONTENT under
+  the pointer, which lands exactly on the barrel prediction and reads as a
+  warped cursor while proving nothing (use a window running `sleep`); a
+  hardware cursor plane is on the panel and in NO capture, so if one were
+  active every screenshot would describe a cursor nobody is looking at; and
+  `hyprctl dispatch movecursor` is a silent no-op on 0.56.
+- **Correct aim still feels wrong at a corner, and that is not a bug to fix.**
+  The click lands, but your HAND travels to the target's TRUE position while
+  your EYE sees it pulled inward — up to ~4.25% of the tile at a corner, ~40 px
+  on a 900 px tile. Nothing in the compositor can reconcile that: Hyprland
+  hit-tests raw pointer coordinates and knows nothing about the shader. The
+  only dial is the warp itself, `TUBE_K1`/`TUBE_K2`, which is why they now live
+  in the MONITOR CONFIG block where `td-monitor` lists them.
 - **hyprctl coordinates and shader coordinates are different spaces on a
   rotated monitor.** hyprctl reports LOGICAL rects in the monitor's rotated
   orientation; the compositing buffer keeps the MODE orientation and Hyprland

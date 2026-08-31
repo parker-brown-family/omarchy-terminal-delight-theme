@@ -34,6 +34,12 @@ out vec4 fragColor;
                                 // td-monitor raises this when you turn a motion knob and
                                 // drops it when all three are zero.
 const float CURV       = 0.00;  // whole-desktop barrel — the per-window warp carries the curve
+const float TUBE_K1    = 0.14;  // per-tile barrel (td-tubes). THIS IS THE AIM KNOB: the
+const float TUBE_K2    = 0.06;  // gather pulls a tile's content inward, and the cursor with
+                                // it, so a click still lands — but your HAND travels to the
+                                // target's true position, up to ~4.25% of the tile away at a
+                                // corner (~40px on a 900px tile). Halve both to halve that.
+                                // test/probe-aim measures it on your own screen.
 const float ABERR      = 0.55;  // chromatic split at the rim
 const float SCAN       = 0.22;  // scanline depth              (TD scanline_opacity)
 const float SCAN_STEP  = 4.0;   // px between scanlines        (TD scanline_step; 0 = legacy sin lines)
@@ -97,8 +103,10 @@ vec2 warp(vec2 uv) {
 
 uniform int wl_output; // monitor id — one frag serves every monitor
 
-const float TUBE_K1 = 0.14; // surface.frag's constants, carried over unchanged
-const float TUBE_K2 = 0.06;
+// TUBE_K1/TUBE_K2 are declared with the other knobs in the MONITOR CONFIG block
+// above, so `td-monitor` lists them and can set them. They started life down
+// here, which meant `td-monitor set TUBE_K1 …` worked while `td-monitor` never
+// mentioned the knob existed — the aim cost had no visible dial.
 
 // SHIPPED AT ZERO, and it has to stay there. A tube is runtime state — it
 // exists because some window is open somewhere — so the count in git is 0 and
