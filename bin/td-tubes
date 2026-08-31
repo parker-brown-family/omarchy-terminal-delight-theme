@@ -221,13 +221,30 @@ tubes_json() {
           | select($mon[(.monitor | tostring)] != null
                    and .workspace.id == $mon[(.monitor | tostring)].ws)
           | .monitor ]
+        # A LOCK SCREEN drawn as a layer — hyprlock and friends, which is what
+        # other setups use even though Omarchy does not (see below). Namespace
+        # matched, NOT size alone: `omarchy-menu` is also a full-output layer at
+        # level 3, and it is translucent — the desktop is meant to show through
+        # it, bowed. Sizing alone flattened the whole desktop every time the menu
+        # opened, which is a worse bug than the one being fixed and is how this
+        # narrowing was earned.
         + [ $m[]
             | . as $mm
             | ((($l[$mm.name].levels["2"] // []) + ($l[$mm.name].levels["3"] // []))
-               | any(.w * .h >= (($mm.width / $mm.scale) * ($mm.height / $mm.scale) * 0.95)))
-              as $blanketed
-            | select($blanketed)
+               | any((((.namespace // "") | ascii_downcase) | test("lock"))
+                     and (.w * .h >= (($mm.width / $mm.scale) * ($mm.height / $mm.scale) * 0.95))))
+              as $locked_by_layer
+            | select($locked_by_layer)
             | $mm.id ]
+        # And the lock screen, which is NEITHER. Omarchy does not use hyprlock —
+        # it locks through omarchy-shell, whose lock is a Quickshell
+        # ext-session-lock surface. That protocol is not a layer and not a
+        # client, so `hyprctl layers` and `hyprctl clients` are both blind to it
+        # and no openlayer ever fires. The tell is second-hand, and it is
+        # Omarchy own: a session lock is one of the reasons a monitor cannot go
+        # solitary, so LOCK turns up in solitaryBlockedBy — see
+        # /usr/share/omarchy/bin/omarchy-hyprland-session-locked.
+        + [ $m[] | select((.solitaryBlockedBy // []) | index("LOCK")) | .id ]
         | unique ) as $covered
     | [ $c[]
         | select(.mapped and (.hidden | not))
@@ -382,7 +399,43 @@ watch)
   precond_set
   json="$(cap "$(tubes_json)")"
   if bake "$json"; then recompile >/dev/null; fi
-  socat -U - "UNIX-CONNECT:$sock" | while read -r line; do
+  # THE LOCK HAS NO EVENT. Every other trigger here arrives on the socket, but
+  # an ext-session-lock is neither a window nor a layer and Hyprland announces
+  # it to nobody — so a lock screen would come up over rects that are still
+  # baked and wear the curve of the tiles, which is precisely the bug this
+  # guards. `read -t` gives the loop a heartbeat without a second process: on
+  # timeout, re-read the one cheap thing that can change unannounced.
+  #
+  # Kept to a grep so the idle path costs one hyprctl and no jq. Measured at
+  # 0.096 s CPU per 30 s idle on a laptop — 0.32%, the price of a lock screen
+  # that is not announced. Two seconds is the trade: any longer and the artefact
+  # is visible for that long on the way in. If Hyprland ever grows a
+  # session-lock event, delete all of this and add it to the case above.
+  # `|| true` is load-bearing twice over, because this file runs under `set -e`
+  # (inherited from td-monitor): `grep -c` exits 1 when the count is ZERO, which
+  # is the normal unlocked case, and a bare `read` that times out is a failing
+  # command. Both killed the daemon on the first tick.
+  lock_seen() { hyprctl monitors -j 2>/dev/null | grep -c '"LOCK"' || true; }
+  locked_was="$(lock_seen)"
+  socat -U - "UNIX-CONNECT:$sock" | while true; do
+    rc=0
+    read -r -t 2 line || rc=$?
+    if ((rc != 0)); then
+      # >128 is the timeout; anything else is EOF and the compositor is gone.
+      # Captured into rc first: inside `if ! read ...` the `!` has already
+      # rewritten $?, and the loop would spin instead of exiting.
+      ((rc > 128)) || break
+      locked_now="$(lock_seen)"
+      if [[ "$locked_now" != "$locked_was" ]]; then
+        locked_was="$locked_now"
+        json="$(cap "$(tubes_json)")"
+        if bake "$json"; then
+          recompile >/dev/null
+          echo "td-tubes: $(jq 'length' <<<"$json") tube(s)  <- session lock (polled; no event exists)"
+        fi
+      fi
+      continue
+    fi
     # A reload re-reads the config and drops both runtime preconditions, so
     # re-assert them there whether or not any tile actually moved.
     [[ "${line%%>>*}" == configreloaded ]] && precond_set

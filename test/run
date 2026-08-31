@@ -537,6 +537,14 @@ assert_eq "rotated monitor: the rect is rotated into buffer space" \
   "$(jq -c '.[] | select(.class=="google-chrome") | [.x,.y,.w,.h]' <<<"$tubes")" "[955,13,926,1054]"
 assert_lacks "terminal-delight is exempt — it warps its own panes" "$tubes" "terminal-delight"
 
+# The regression that a size-only rule caused. omarchy-menu is a full-output
+# layer at level 3 and it is TRANSLUCENT — the desktop shows through it and is
+# supposed to stay bowed. Matching layers by size alone flattened the whole
+# desktop on every menu press, which is worse than the bug being fixed. The
+# fixture carries the menu so that cannot come back.
+assert_eq "a full-output but translucent layer (the menu) does NOT drop tubes" \
+  "$(jq '[.[] | select(.mon == 0)] | length' <<<"$tubes")" "1"
+
 # The screensaver artefact. org.omarchy.screensaver is a FULLSCREEN window, so it
 # is already excluded on its own account — and that is exactly why this was
 # missed. The offender is every OTHER tube on that monitor: rects for windows the
@@ -559,6 +567,18 @@ assert_eq "a layer covering the output drops that monitor's tubes" \
   "$(jq '[.[] | select(.mon == 0)] | length' <<<"$locked")" "0"
 assert_eq "…and a small overlay (a notification) does not" \
   "$(jq '[.[] | select(.mon == 1)] | length' <<<"$locked")" "1"
+
+# The one that actually bit. Omarchy does not use hyprlock — it locks through
+# omarchy-shell, and a Quickshell ext-session-lock is neither a client nor a
+# layer, so `clients -j` and `layers -j` are both blind to it and no openlayer
+# fires. The only tell is second-hand: LOCK in solitaryBlockedBy. This fixture
+# also has no layers.json at all, which exercises the stub's honest default.
+export TD_TEST_FIXTURES="$here/fixtures/tubes-sessionlock"
+slock="$(tubes_json)"
+assert_eq "a session lock drops that monitor's tubes, seen only via solitaryBlockedBy" \
+  "$(jq '[.[] | select(.mon == 0)] | length' <<<"$slock")" "0"
+assert_eq "…and leaves an unlocked monitor alone" \
+  "$(jq '[.[] | select(.mon == 1)] | length' <<<"$slock")" "1"
 export TD_TEST_FIXTURES="$here/fixtures/tubes"
 
 block="$(emit_block "$tubes")"
