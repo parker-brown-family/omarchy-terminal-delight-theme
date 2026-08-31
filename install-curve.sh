@@ -63,6 +63,11 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # warped twice, the cursor once, and the miss comes back. So --tubes moves the
 # per-window shaders aside rather than leaving that to a reader's discipline.
 TUBES=""
+# Set when --tubes actually moved a per-window shader out of the way. That means
+# one is STILL COMPILED INTO THIS SESSION (a window shader is loaded at login and
+# survives both rm and `hyprctl reload`), so the watcher must not be started
+# until the next login — see install_unit.
+WARP_WAS_LIVE=""
 DISABLED_DIR="$SHADER_DIR/disabled-by-td-tubes"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT="td-tubes.service"
@@ -86,6 +91,25 @@ install_unit() {
   sed "s|@TD_TUBES@|$here/bin/td-tubes|g" "$here/systemd/$UNIT" >"$UNIT_DIR/$UNIT"
   echo "installed $UNIT_DIR/$UNIT"
   systemctl --user daemon-reload >/dev/null 2>&1 || true
+
+  # DO NOT start the watcher in a session that still has the old per-window
+  # shader compiled in. Moving the file aside does not unload it, so baking
+  # tubes now would warp every window TWICE — once by the stale shader, once by
+  # the monitor pass — while the cursor is warped only by the second. That is
+  # the precise defect the tubes exist to remove, and starting eagerly would
+  # hand it to the user for the rest of their session. Enable for next login and
+  # say so.
+  if [[ -n $WARP_WAS_LIVE ]]; then
+    if systemctl --user enable "$UNIT" >/dev/null 2>&1; then
+      echo "enabled $UNIT for NEXT LOGIN — deliberately not started now."
+      echo "  The per-window shader you just moved aside is still compiled into"
+      echo "  this session, and running both warps bows every window twice."
+    else
+      echo "wrote the unit but could not enable it; check: systemctl --user status $UNIT"
+    fi
+    return 0
+  fi
+
   if systemctl --user enable --now "$UNIT" >/dev/null 2>&1; then
     echo "enabled and started $UNIT — the tubes now follow the layout"
   else
@@ -165,6 +189,7 @@ if [[ -n $TUBES ]]; then
       mv -f "$SHADER_DIR/$f" "$DISABLED_DIR/$f"
       echo "moved $f aside to ${DISABLED_DIR/#$HOME/\~} — the tubes are the window warp now"
       moved=true
+      WARP_WAS_LIVE=1
     fi
   done
   $moved || echo "no per-window warp installed — nothing to move aside"

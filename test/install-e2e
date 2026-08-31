@@ -188,9 +188,19 @@ if [[ -f $unit ]] && ! grep -q '@TD_TUBES@' "$unit" && grep -q 'td-tubes watch' 
 else
   no "the watcher unit is missing or still carries @TD_TUBES@ — tubes would rot silently"
 fi
-grep -q 'enable --now td-tubes.service' "$T/log/systemctl.log" 2>/dev/null &&
-  ok "…and asked systemd to enable it" ||
+# A surface.frag was present above, so --tubes moved one aside — which means one
+# is still compiled into the caller's session. Starting the watcher now would
+# bake tubes under it and warp every window twice, so the installer must enable
+# for next login and NOT start. Asserting the absence of --now is the point.
+if grep -qE '(^|[[:space:]])enable td-tubes\.service$' "$T/log/systemctl.log" 2>/dev/null; then
+  ok "…and enabled it for next login"
+else
   no "the unit was written but never enabled"
+  sed 's/^/      /' "$T/log/systemctl.log" 2>/dev/null | head -5
+fi
+grep -q -- '--now' "$T/log/systemctl.log" 2>/dev/null &&
+  no "started the watcher while the old per-window shader is still live — double warp" ||
+  ok "…without starting it, because the shader it replaced is still in this session"
 
 # The user's own file was MOVED, not deleted, so uninstall owes it back.
 if bash "$theme/install-curve.sh" --uninstall >/dev/null 2>&1 &&
