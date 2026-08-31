@@ -186,9 +186,16 @@ tubes_json() {
   need hyprctl
   need jq
   local mons clients layers
-  mons="$(hyprctl monitors -j)"
-  clients="$(hyprctl clients -j)"
-  layers="$(hyprctl layers -j)"
+  mons="$(hyprctl monitors -j 2>/dev/null)"
+  clients="$(hyprctl clients -j 2>/dev/null)"
+  layers="$(hyprctl layers -j 2>/dev/null)"
+  # hyprctl prints NOTHING when it cannot reach a compositor — over ssh without
+  # the session environment, or from a unit that starts before the session is
+  # up. Empty is not JSON, and `--argjson` answers that with a jq usage dump
+  # that says nothing whatsoever about the real problem. Say it here instead.
+  [[ -n $mons && -n $clients ]] ||
+    die "cannot reach Hyprland — no monitors or clients came back. Is a session running, and is HYPRLAND_INSTANCE_SIGNATURE set?"
+  [[ -n $layers ]] || layers='{}'
   jq -n --argjson m "$mons" --argjson c "$clients" --argjson l "$layers" '
     def xf($t; $W; $H): . as [$x, $y]
       | if   $t == 1 then [$y,      $H - $x]
