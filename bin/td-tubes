@@ -201,26 +201,28 @@ tubes_json() {
         else                [$x,      $y     ] end;
     ($m | map({ key: (.id | tostring),
                 value: { x: .x, y: .y, scale: .scale, w: .width, h: .height,
-                         t: .transform, ws: .activeWorkspace.id } })
+                         t: .transform, ws: .activeWorkspace.id,
+                         special: (.specialWorkspace.id // 0) } })
         | from_entries) as $mon
-    # A monitor whose visible surface is NOT its tiles. tube_at picks a tube by
-    # OUTPUT PIXEL, so a rect left baked under something that covers it warps
-    # whatever is drawn on top — the screensaver came out with the tiles curved
-    # into it, straight on the half of the screen no tile happened to occupy.
-    # Two ways a monitor stops showing its tiles:
-    #   * a FULLSCREEN window on the active workspace. It is excluded from the
-    #     list below on its own account, which is why this was missed: the
-    #     offender is not the fullscreen window, it is every OTHER tube on that
-    #     monitor, each one a rect for a window nobody can see.
-    #   * a LAYER covering the output — a lock screen, an idle overlay. Layers
-    #     are not clients, so nothing in the client list can stand for them.
-    #     Only levels 2 (top) and 3 (overlay) count: the wallpaper is a
-    #     full-size layer too, and it sits UNDER the windows.
-    | ( [ $c[]
-          | select(.mapped and (.hidden | not) and (.fullscreen != 0))
-          | select($mon[(.monitor | tostring)] != null
-                   and .workspace.id == $mon[(.monitor | tostring)].ws)
-          | .monitor ]
+    # THE INVARIANT: every visible surface claims its own rect, so nothing is
+    # ever warped by a rect that is not its own.
+    #
+    # tube_at picks a tube by OUTPUT PIXEL. A surface that is DRAWN but has no
+    # tube of its own therefore gets whatever rect happens to lie beneath it —
+    # and that is the tear, every time. The screensaver, the scratchpad, the
+    # calculator: not new bugs, the same bug, arriving through whichever filter
+    # dropped a visible surface from this list. So the list no longer drops any:
+    # fullscreen windows are in, special-workspace windows are in, and a window
+    # that must not bow gets curvature 0 rather than being omitted.
+    #
+    # What remains below is the one honest case: a surface we cannot enumerate
+    # or place. There is no rect to give it, so the partition is unknowable and
+    # the monitor gets NO tubes at all. That is a statement about our knowledge,
+    # not a list of exceptions, and it is why it does not grow.
+    | ( [ $m[]
+          | . as $mm
+          | select((.solitaryBlockedBy // []) | index("LOCK"))
+          | $mm.id ]
         # A LOCK SCREEN drawn as a layer — hyprlock and friends, which is what
         # other setups use even though Omarchy does not (see below). Namespace
         # matched, NOT size alone: `omarchy-menu` is also a full-output layer at
@@ -243,20 +245,20 @@ tubes_json() {
         # and no openlayer ever fires. The tell is second-hand, and it is
         # Omarchy own: a session lock is one of the reasons a monitor cannot go
         # solitary, so LOCK turns up in solitaryBlockedBy — see
-        # /usr/share/omarchy/bin/omarchy-hyprland-session-locked.
-        + [ $m[] | select((.solitaryBlockedBy // []) | index("LOCK")) | .id ]
+        # /usr/share/omarchy/bin/omarchy-hyprland-session-locked. Detected in the
+        # first arm above, which is where the "we cannot place it" cases live.
         | unique ) as $covered
     | [ $c[]
         | select(.mapped and (.hidden | not))
         | select((.monitor) as $mn | ($covered | index($mn)) == null)
-        # Terminal Delight warps its own panes and hit-tests through the same
-        # map; bending it again here would bend it twice and break the app.
-        | select(.class != "terminal-delight")
-        # A fullscreen window has no rounding and no frame to be a tube for.
-        | select(.fullscreen == 0)
-        | select(.workspace.id > 0)
         | ($mon[.monitor | tostring]) as $mo
-        | select($mo != null and .workspace.id == $mo.ws)
+        # VISIBLE ON THIS MONITOR, which is not the same as "on its active
+        # workspace". A shown special workspace — the scratchpad, ws -98 — is
+        # drawn over the tiles and was being dropped by a `.workspace.id > 0`
+        # test, so it wore whatever tile lay beneath it.
+        | select($mo != null
+                 and (.workspace.id == $mo.ws
+                      or ($mo.special != 0 and .workspace.id == $mo.special)))
         | (((.at[0] - $mo.x) * $mo.scale)) as $x0
         | (((.at[1] - $mo.y) * $mo.scale)) as $y0
         | ($x0 + .size[0] * $mo.scale)     as $x1
@@ -272,6 +274,13 @@ tubes_json() {
             y: ([$a[1], $b[1]] | min),
             w: (($b[0] - $a[0]) | length),
             h: (($b[1] - $a[1]) | length),
+            # Curvature 0 is how a surface opts out WITHOUT leaving a hole.
+            # Terminal Delight warps its own panes and hit-tests through the
+            # same map, so bending it here would bend it twice — but simply
+            # omitting it left its pixels unclaimed, free to be drawn through a
+            # neighbouring map. It claims them flat instead. (No apostrophes in
+            # here: this jq program is single-quoted and one would end it.)
+            curv:  (if .class == "terminal-delight" then 0 else 1 end),
             fh: .focusHistoryID } ]
     | sort_by(.fh)
   '
@@ -296,6 +305,12 @@ emit_block() {
     echo ");"
     echo "const int  TUBE_MON[TUBE_COUNT]  = int[TUBE_COUNT]("
     jq -r '[.[].mon | tostring] | join(", ") | "    " + .' <<<"$json"
+    echo ");"
+    # Floats again, and for the same reason as the rects: a GLSL float array
+    # written as bare ints is accepted by one driver and rejected by the next.
+    echo "const float TUBE_CURV[TUBE_COUNT] = float[TUBE_COUNT]("
+    jq -r '[.[] | (.curv // 1) * 1.0 | tostring
+                  | if test("[.]") then . else . + ".0" end] | join(", ") | "    " + .' <<<"$json"
     echo ");"
     echo "#endif"
   fi

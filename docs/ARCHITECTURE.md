@@ -144,20 +144,33 @@ focus all live — and are tested — in exactly one place.
   warped cursor while proving nothing (use a window running `sleep`); a hardware
   cursor plane would be on the panel and in NO capture; and
   `hyprctl dispatch movecursor` is a silent no-op on 0.56.
-- **A tube outlives what it is a tube FOR, and the monitor pass cannot tell.**
-  `tube_at` picks by output pixel, so a rect left baked under something that
-  covers it warps whatever is drawn on top. The screensaver
-  (`org.omarchy.screensaver`, a fullscreen window) came out with the tiles curved
-  into it — straight on the half of the screen no tile occupied, bowed inside a
-  bezel box on the half one did. The fullscreen window was already excluded on
-  its own account, which is precisely why this was missed: **the offender is
-  every OTHER tube on that monitor.** Same for a lock screen, which is a *layer*
-  and therefore invisible to `clients -j` entirely. `tubes_json` now drops every
-  tube on a monitor that has a fullscreen window on its active workspace, or a
-  layer covering the output — levels 2 and 3 only, since the wallpaper is a
-  full-size layer that sits *under* the windows. `watch` listens for
-  `openlayer`/`closelayer` (both are real events — verified as
-  `openlayer>>omarchy-menu`).
+- **THE INVARIANT: every visible surface claims its own rect, so nothing is ever
+  warped by a rect that is not its own.** This is the whole design, and it
+  replaced a list of exceptions that was growing by one entry per overlay.
+  `tube_at` picks a tube by OUTPUT PIXEL. A surface that is *drawn* but has no
+  tube of its own therefore gets whatever rect happens to lie beneath it — and
+  that is the tear, every time. The screensaver, the scratchpad, the calculator
+  over an un-tubed neighbour: not three bugs, one bug, arriving through whichever
+  filter had dropped a visible surface from the registry.
+  So `tubes_json` drops none of them. Fullscreen windows are in; windows on a
+  *raised special workspace* are in (visible-on-this-monitor is not the same as
+  on-its-active-workspace); and a surface that must not bow gets **curvature 0**
+  instead of being omitted — an identity map that draws no bezel but still claims
+  its pixels, which is how `terminal-delight` opts out without leaving a hole for
+  a neighbour to fill. A fullscreen window is now warped by one continuous map
+  edge to edge rather than being torn across the tiles it covers.
+  What remains is the one honest case: **a surface we cannot enumerate or
+  place.** There is no rect to give it, so the partition is unknowable and the
+  monitor gets no tubes at all. That is a statement about our knowledge, not a
+  list of exceptions, which is why it does not grow. Today it is exactly one
+  thing: a session lock. `watch` also listens for `openlayer`/`closelayer` (both
+  real events — verified as `openlayer>>omarchy-menu`).
+- **A translucent full-output layer is the one shape this cannot serve.**
+  `omarchy-menu` covers the screen and the desktop shows through it. The menu and
+  the desktop behind it occupy the same pixels and want different maps, which a
+  single-pass gather cannot give them. The tiles keep their maps and the menu is
+  warped along with them — the right trade, since the desktop is the dominant
+  content, but it is a limit rather than a solved case.
 - **Omarchy's lock is not a layer, and nothing announces it.** There is no
   `hyprlock` on the box: `omarchy-system-lock` calls `omarchy-shell lock`, whose
   lock is a Quickshell **ext-session-lock** surface. That protocol is neither a
