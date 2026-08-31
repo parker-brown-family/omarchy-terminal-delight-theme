@@ -547,6 +547,15 @@ assert_eq "an empty layout emits no array — GLSL forbids a zero-length one" \
 assert_has "…and still declares the count, so the #if drops the rest" \
   "$(emit_block '[]')" "#define TUBE_COUNT 0"
 
+# And the frag in this repo must itself be at zero. `apply` rewrites the block
+# in the INSTALLED theme, but anyone whose checkout IS the installed theme
+# rewrites the checkout — and would commit their own window rects as what every
+# stranger gets on install. It is also the premise under which this change ships
+# no new screenshot: at zero the tube path compiles out and the picture cannot
+# have moved. Both claims, one line.
+assert_eq "the frag ships with no tubes of its own" \
+  "$(grep -c '^#define TUBE_COUNT 0$' "$root/crt-glass.frag")" "1"
+
 echo
 if [[ "$fail" -eq 0 ]]; then
   printf '\033[32mall %d green\033[0m\n' "$pass"

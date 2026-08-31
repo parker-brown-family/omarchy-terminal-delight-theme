@@ -100,6 +100,14 @@ uniform int wl_output; // monitor id — one frag serves every monitor
 const float TUBE_K1 = 0.14; // surface.frag's constants, carried over unchanged
 const float TUBE_K2 = 0.06;
 
+// SHIPPED AT ZERO, and it has to stay there. A tube is runtime state — it
+// exists because some window is open somewhere — so the count in git is 0 and
+// every branch below compiles out: tube_at() is `return -1`, tube_map() is the
+// identity, edge is untouched. A clean install therefore renders exactly the
+// pixels it rendered before this block existed, which is why adding the tubes
+// re-shot no screenshot. If this ever reads non-zero in git, someone ran
+// `td-tubes apply` against the checkout and is one commit from publishing their
+// own window layout as the theme's default. test/run pins it.
 // ---- TUBE DATA (managed by td-tubes — do not hand-edit) ----
 #define TUBE_COUNT 0
 #if TUBE_COUNT > 0
