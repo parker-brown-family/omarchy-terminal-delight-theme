@@ -240,6 +240,13 @@ is the warp:
 td-monitor set TUBE_K1 0.07 TUBE_K2 0.03    # half the bow, half the reach
 ```
 
+**Anything covering a tile turns that monitor's tubes off.** A tube is chosen by
+output pixel, so a rect left baked under a screensaver or a lock screen would
+bow whatever is drawn on top of it — which is how the screensaver first arrived
+with the tiles curved into it. A fullscreen window on the active workspace, or a
+layer covering the output, now drops every tube on that monitor and the watcher
+puts them back when it goes.
+
 Other known edges, so they are not surprises: a live drag-resize has no
 per-frame event, so a tube lags the drag and snaps true on release; the list
 caps at 24 windows and says so when it drops one; and `damage_tracking = 0`

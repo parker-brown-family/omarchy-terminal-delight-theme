@@ -185,10 +185,11 @@ state_report() {
 tubes_json() {
   need hyprctl
   need jq
-  local mons clients
+  local mons clients layers
   mons="$(hyprctl monitors -j)"
   clients="$(hyprctl clients -j)"
-  jq -n --argjson m "$mons" --argjson c "$clients" '
+  layers="$(hyprctl layers -j)"
+  jq -n --argjson m "$mons" --argjson c "$clients" --argjson l "$layers" '
     def xf($t; $W; $H): . as [$x, $y]
       | if   $t == 1 then [$y,      $H - $x]
         elif $t == 2 then [$W - $x, $H - $y]
@@ -202,8 +203,35 @@ tubes_json() {
                 value: { x: .x, y: .y, scale: .scale, w: .width, h: .height,
                          t: .transform, ws: .activeWorkspace.id } })
         | from_entries) as $mon
+    # A monitor whose visible surface is NOT its tiles. tube_at picks a tube by
+    # OUTPUT PIXEL, so a rect left baked under something that covers it warps
+    # whatever is drawn on top — the screensaver came out with the tiles curved
+    # into it, straight on the half of the screen no tile happened to occupy.
+    # Two ways a monitor stops showing its tiles:
+    #   * a FULLSCREEN window on the active workspace. It is excluded from the
+    #     list below on its own account, which is why this was missed: the
+    #     offender is not the fullscreen window, it is every OTHER tube on that
+    #     monitor, each one a rect for a window nobody can see.
+    #   * a LAYER covering the output — a lock screen, an idle overlay. Layers
+    #     are not clients, so nothing in the client list can stand for them.
+    #     Only levels 2 (top) and 3 (overlay) count: the wallpaper is a
+    #     full-size layer too, and it sits UNDER the windows.
+    | ( [ $c[]
+          | select(.mapped and (.hidden | not) and (.fullscreen != 0))
+          | select($mon[(.monitor | tostring)] != null
+                   and .workspace.id == $mon[(.monitor | tostring)].ws)
+          | .monitor ]
+        + [ $m[]
+            | . as $mm
+            | ((($l[$mm.name].levels["2"] // []) + ($l[$mm.name].levels["3"] // []))
+               | any(.w * .h >= (($mm.width / $mm.scale) * ($mm.height / $mm.scale) * 0.95)))
+              as $blanketed
+            | select($blanketed)
+            | $mm.id ]
+        | unique ) as $covered
     | [ $c[]
         | select(.mapped and (.hidden | not))
+        | select((.monitor) as $mn | ($covered | index($mn)) == null)
         # Terminal Delight warps its own panes and hit-tests through the same
         # map; bending it again here would bend it twice and break the app.
         | select(.class != "terminal-delight")
@@ -360,7 +388,8 @@ watch)
     [[ "${line%%>>*}" == configreloaded ]] && precond_set
     case "${line%%>>*}" in
     openwindow | closewindow | movewindow | movewindowv2 | changefloatingmode | fullscreen | \
-      workspace | workspacev2 | focusedmon | monitoradded | monitorremoved | activewindowv2 | configreloaded)
+      workspace | workspacev2 | focusedmon | monitoradded | monitorremoved | activewindowv2 | \
+      openlayer | closelayer | configreloaded)
       json="$(cap "$(tubes_json)")"
       if bake "$json"; then
         recompile >/dev/null

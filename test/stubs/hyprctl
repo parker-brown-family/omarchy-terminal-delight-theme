@@ -7,6 +7,15 @@ case "$*" in
   "clients -j" | "-j clients")               cat "${TD_TEST_FIXTURES:?}/clients.json" ;;
   "activeworkspace -j" | "-j activeworkspace") cat "${TD_TEST_FIXTURES:?}/activeworkspace.json" ;;
   "monitors -j" | "-j monitors")             cat "${TD_TEST_FIXTURES:?}/monitors.json" ;;
+  # Layers are not clients, so a lock screen or idle overlay is invisible to
+  # `clients -j`. A fixture dir without one answers "no layers anywhere", which
+  # is the honest default rather than a hard failure.
+  "layers -j" | "-j layers")
+    if [[ -f "${TD_TEST_FIXTURES:?}/layers.json" ]]; then
+      cat "${TD_TEST_FIXTURES:?}/layers.json"
+    else
+      echo "{}"
+    fi ;;
   "activewindow -j" | "-j activewindow")     cat "${TD_TEST_FIXTURES:?}/activewindow.json" ;;
   "getoption decoration:rounding")           printf 'int: %s\nset: true\n' "${TD_TEST_ROUNDING:-14}" ;;
   getoption*)                                echo "int: 0" ;;

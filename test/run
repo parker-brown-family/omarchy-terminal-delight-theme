@@ -537,6 +537,30 @@ assert_eq "rotated monitor: the rect is rotated into buffer space" \
   "$(jq -c '.[] | select(.class=="google-chrome") | [.x,.y,.w,.h]' <<<"$tubes")" "[955,13,926,1054]"
 assert_lacks "terminal-delight is exempt — it warps its own panes" "$tubes" "terminal-delight"
 
+# The screensaver artefact. org.omarchy.screensaver is a FULLSCREEN window, so it
+# is already excluded on its own account — and that is exactly why this was
+# missed. The offender is every OTHER tube on that monitor: rects for windows the
+# fullscreen surface is covering, which tube_at still picks by output pixel and
+# warps whatever is drawn on top. Live capture had the fullscreen window straight
+# on the half of the screen no tile occupied and bowed inside a bezel box on the
+# half one did.
+assert_lacks "a fullscreen window gets no tube of its own" "$tubes" "org.omarchy.screensaver"
+assert_eq "…and takes the whole monitor's tubes with it — nothing under it is visible" \
+  "$(jq '[.[] | select(.mon == 2)] | length' <<<"$tubes")" "0"
+assert_eq "…while the monitors it does not cover are untouched" \
+  "$(jq '[.[] | select(.mon != 2)] | length' <<<"$tubes")" "2"
+
+# A lock screen is a LAYER, so nothing in `clients -j` can stand for it. Same
+# artefact, different surface. The wallpaper is a full-size layer too, which is
+# why only levels 2 and 3 count — it sits under the windows, not over them.
+export TD_TEST_FIXTURES="$here/fixtures/tubes-locked"
+locked="$(tubes_json)"
+assert_eq "a layer covering the output drops that monitor's tubes" \
+  "$(jq '[.[] | select(.mon == 0)] | length' <<<"$locked")" "0"
+assert_eq "…and a small overlay (a notification) does not" \
+  "$(jq '[.[] | select(.mon == 1)] | length' <<<"$locked")" "1"
+export TD_TEST_FIXTURES="$here/fixtures/tubes"
+
 block="$(emit_block "$tubes")"
 assert_has "the baked block declares its count" "$block" "#define TUBE_COUNT 2"
 assert_has "rects are floats, not bare ints one driver would reject" "$block" \
