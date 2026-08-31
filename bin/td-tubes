@@ -43,6 +43,47 @@ MAX_TUBES=24
 
 need() { command -v "$1" >/dev/null || die "$1 is required"; }
 
+# THE TWO PRECONDITIONS. A tube in the monitor pass is only honest when both
+# hold, and each fails in its own visible way, so the tool sets them rather
+# than trusting anyone to remember:
+#
+#   cursor:no_hardware_cursors = 1
+#     A hardware cursor is a scanout plane the shader never touches, so the
+#     picture bends and the pointer does not — which is the drift we came here
+#     to kill. A software cursor is composited into the buffer the shader
+#     gathers from, so it bends WITH the content and the click lands.
+#
+#   debug:damage_tracking = 0
+#     The warp is a gather: the output pixel at P samples the source at
+#     tube_map(P), somewhere else. Re-blitting only a damaged rect leaves every
+#     pixel in it whose source lies outside stale — and a software cursor
+#     damages a fresh small rect every frame it moves, so it reads as tearing
+#     under mouse movement specifically. Full-frame redraw is the price of the
+#     gather. Note it is per CHANGED frame, not per vsync: an idle desktop
+#     still renders nothing.
+#
+# Both are runtime-only (`hyprctl eval`), so a `hyprctl reload` drops them —
+# which is why `watch` re-asserts on configreloaded.
+precond_set() {
+  hyprctl eval 'hl.config({ cursor = { no_hardware_cursors = 1 }, debug = { damage_tracking = 0 } })' >/dev/null
+}
+
+precond_clear() {
+  hyprctl eval 'hl.config({ cursor = { no_hardware_cursors = 2 }, debug = { damage_tracking = 2 } })' >/dev/null
+}
+
+# Report rather than assume — the point is that a wrong value is diagnosable
+# instead of being blamed on the warp.
+precond_report() {
+  local hw dt
+  hw="$(hyprctl getoption cursor:no_hardware_cursors | awk '/int:/{print $2}')"
+  dt="$(hyprctl getoption debug:damage_tracking | awk '/int:/{print $2}')"
+  [[ "$hw" == 1 ]] && echo "  cursor:no_hardware_cursors = 1  ok — the cursor rides the shader" ||
+    echo "  cursor:no_hardware_cursors = $hw  WRONG — clicks will drift again (want 1)"
+  [[ "$dt" == 0 ]] && echo "  debug:damage_tracking      = 0  ok — no stale pixels under the gather" ||
+    echo "  debug:damage_tracking      = $dt  WRONG — expect tearing on mouse movement (want 0)"
+}
+
 # Every window that should wear a tube, most-recently-focused first (the shader
 # takes the first hit, so that ordering is what makes a stacked window win the
 # pixels it covers).
@@ -202,19 +243,25 @@ if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0 2>/dev/null || true; fi
 case "${1:-list}" in
 list)
   describe "$(cap "$(tubes_json)")"
+  echo "preconditions:"
+  precond_report
   ;;
 apply)
   json="$(cap "$(tubes_json)")"
   describe "$json"
+  precond_set
   if bake "$json"; then recompile; else echo "unchanged — nothing recompiled"; fi
+  precond_report
   ;;
 off)
+  precond_clear
   if bake '[]'; then
     echo "0 tube(s): the glass is flat"
     recompile
   else
     echo "already flat"
   fi
+  echo "  cursor and damage tracking handed back to Hyprland's defaults"
   ;;
 watch)
   need socat
@@ -224,9 +271,13 @@ watch)
   # drag-resize, so a tube lags the drag and snaps true on release — a known
   # edge, not a mystery.
   echo "td-tubes: watching $sock (ctrl-c to stop)"
+  precond_set
   json="$(cap "$(tubes_json)")"
   if bake "$json"; then recompile >/dev/null; fi
   socat -U - "UNIX-CONNECT:$sock" | while read -r line; do
+    # A reload re-reads the config and drops both runtime preconditions, so
+    # re-assert them there whether or not any tile actually moved.
+    [[ "${line%%>>*}" == configreloaded ]] && precond_set
     case "${line%%>>*}" in
     openwindow | closewindow | movewindow | movewindowv2 | changefloatingmode | fullscreen | \
       workspace | workspacev2 | focusedmon | monitoradded | monitorremoved | activewindowv2 | configreloaded)

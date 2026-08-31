@@ -113,6 +113,35 @@ focus all live — and are tested — in exactly one place.
   same tile, same OSC push. Not a delivery bug; palette redefinition has no
   jurisdiction over per-cell RGB. Don't chase it with more OSC (see #7); the
   every-pixel path is renderer-level grading (Terminal Delight adoption).
+- **A window shader can never be click-correct.** `shaders/surface.frag` runs
+  during `renderWorkspace()`, before `renderSoftwareCursorsFor()` composites
+  the cursor into the same buffer, so the picture moves and the pointer does
+  not — ~1.7% of a window's width at its rim, ~4.25% at the corner, at
+  k1=0.14/k2=0.06. Not tunable; it is which pass you are in. The monitor pass
+  runs after the cursor is in the buffer, which is why the tubes live there
+  (`td-tubes`). Same reason Terminal Delight's own CRT pass is honest — see
+  `warp_screen_to_content`, app/src/pane.rs.
+- **hyprctl coordinates and shader coordinates are different spaces on a
+  rotated monitor.** hyprctl reports LOGICAL rects in the monitor's rotated
+  orientation; the compositing buffer keeps the MODE orientation and Hyprland
+  rotates at the final blit. Identical on transform 0, 90 degrees apart
+  otherwise. Convert with Hyprutils' `Vector2D::transform` (both corners, then
+  rebuild axis-aligned), never with an origin shift alone. Tell: the shader's
+  own scanlines come out sideways on a rotated display.
+- **A gather-warp screen shader needs `debug:damage_tracking = 0`.** The
+  output pixel at P samples the source at some other point, so re-blitting
+  only a damaged rect leaves stale pixels inside it. With a software cursor
+  damaging a fresh rect every frame, it reads as tearing under mouse movement.
+  `td-tubes` sets this, and `cursor:no_hardware_cursors = 1` beside it; both
+  are runtime-only and a `hyprctl reload` drops them.
+- **A screenshot cannot photograph a damage-tracking artifact.** wlr-screencopy
+  calls `damageMonitor()` on every capture (Screencopy.cpp), which Hyprland
+  promotes to a full-monitor repaint (Renderer.cpp) — so the act of capturing
+  repairs exactly the staleness you were trying to measure. A grim-based probe
+  for this class of bug reports "clean" unconditionally; one was written here
+  and deleted for that reason. This is the one renderer question the
+  pixel-verification rule below CANNOT answer: it needs a human looking at a
+  live screen.
 
 ## Testing doctrine
 
