@@ -156,7 +156,23 @@ focus all live — and are tested — in exactly one place.
   tube on a monitor that has a fullscreen window on its active workspace, or a
   layer covering the output — levels 2 and 3 only, since the wallpaper is a
   full-size layer that sits *under* the windows. `watch` listens for
-  `openlayer`/`closelayer` so a lock screen re-bakes.
+  `openlayer`/`closelayer` (both are real events — verified as
+  `openlayer>>omarchy-menu`).
+- **Omarchy's lock is not a layer, and nothing announces it.** There is no
+  `hyprlock` on the box: `omarchy-system-lock` calls `omarchy-shell lock`, whose
+  lock is a Quickshell **ext-session-lock** surface. That protocol is neither a
+  client nor a layer, so `hyprctl clients` and `hyprctl layers` are both blind to
+  it and no event fires — a lock screen came up over rects that were still baked
+  and wore the curve of the tiles. The only tell is second-hand and is Omarchy's
+  own: a session lock blocks a monitor from going solitary, so `LOCK` appears in
+  `solitaryBlockedBy` (see `/usr/share/omarchy/bin/omarchy-hyprland-session-locked`).
+  `watch` therefore carries a 2 s `read -t` heartbeat purely for this one state —
+  measured at 0.096 s CPU per 30 s idle, 0.32%.
+- **Match a covering layer by NAMESPACE, not by size.** `omarchy-menu` is also a
+  full-output level-3 layer, and it is translucent: the desktop shows through it
+  and is supposed to stay bowed. A size-only rule flattened the entire desktop on
+  every menu press — a worse bug than the one being fixed, and the reason the
+  rule now requires `lock` in the namespace as well.
 - **A per-window shader survives deleting its file AND `hyprctl reload`. Only a
   logout drops it.** Measured 2026-08-31 with `test/probe-warp-count`: with
   `surface.frag` deleted from `~/.config/hypr/shaders/` and after a reload,
