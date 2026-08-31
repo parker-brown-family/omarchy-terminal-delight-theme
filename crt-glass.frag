@@ -119,10 +119,19 @@ uniform int wl_output; // monitor id — one frag serves every monitor
 // ---- TUBE DATA (managed by td-tubes — do not hand-edit) ----
 #define TUBE_COUNT 0
 #if TUBE_COUNT > 0
-const vec4 TUBE_RECT[TUBE_COUNT] = vec4[TUBE_COUNT](vec4(0.0));
-const int  TUBE_MON[TUBE_COUNT]  = int[TUBE_COUNT](0);
+const vec4  TUBE_RECT[TUBE_COUNT] = vec4[TUBE_COUNT](vec4(0.0));
+const int   TUBE_MON[TUBE_COUNT]  = int[TUBE_COUNT](0);
+const float TUBE_CURV[TUBE_COUNT] = float[TUBE_COUNT](0.0);
 #endif
 // ---- END TUBE DATA ----
+
+// TUBE_CURV is how a surface opts OUT without leaving a hole. A surface that
+// should not bow — terminal-delight, which warps its own panes — still needs to
+// CLAIM its pixels, because tube_at picks the first rect containing a pixel and
+// an unclaimed region falls through to whatever rect is underneath. Leaving such
+// a window out of the list is what tears it: it gets drawn through a neighbour's
+// map. So it gets a tube with curvature 0, which is the identity and draws no
+// bezel, and nothing else's map can reach it.
 
 // Which tube owns this pixel, or -1 for bare desktop. td-tubes emits the list
 // most-recently-focused first and the first hit wins, so a window stacked over
@@ -150,11 +159,14 @@ vec2 tube_map(int i, vec2 t, vec2 res, out float edge) {
     if (i < 0)
         return t;
     vec4  r  = TUBE_RECT[i];
+    float k  = TUBE_CURV[i];
     vec2  c  = ((t * res) - r.xy) / r.zw - 0.5;
     float r2 = dot(c, c);
-    vec2  w  = 0.5 + c * (1.0 + TUBE_K1 * r2 + TUBE_K2 * r2 * r2);
+    vec2  w  = 0.5 + c * (1.0 + TUBE_K1 * k * r2 + TUBE_K2 * k * r2 * r2);
     vec2  e  = min(w, 1.0 - w);
-    edge     = smoothstep(0.0, 0.004, min(e.x, e.y));
+    // At k = 0 this is the identity, and a flat surface must not wear a bezel:
+    // the smoothstep would still black the outermost pixels of its own rect.
+    edge     = k > 0.0 ? smoothstep(0.0, 0.004, min(e.x, e.y)) : 1.0;
     return (r.xy + clamp(w, 0.0, 1.0) * r.zw) / res;
 #else
     return t;

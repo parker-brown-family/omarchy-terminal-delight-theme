@@ -240,12 +240,23 @@ is the warp:
 td-monitor set TUBE_K1 0.07 TUBE_K2 0.03    # half the bow, half the reach
 ```
 
-**Anything covering a tile turns that monitor's tubes off.** A tube is chosen by
-output pixel, so a rect left baked under a screensaver or a lock screen would
-bow whatever is drawn on top of it — which is how the screensaver first arrived
-with the tiles curved into it. A fullscreen window on the active workspace, or a
-layer covering the output, now drops every tube on that monitor and the watcher
-puts them back when it goes.
+**Every visible surface gets its own tube.** That is the whole rule, and it is
+worth stating because the obvious alternative — exclude the things that should
+not bow — is what produced every overlay bug this theme has had. A tube is
+chosen by *output pixel*, so a surface that is drawn but has no tube of its own
+is drawn through whatever rect lies beneath it: that is what put the curve of
+the tiles into the screensaver, the scratchpad and a floating calculator.
+
+So nothing visible is excluded. A fullscreen window gets a tube the size of the
+screen and is bowed by one continuous map instead of being torn across the tiles
+it covers. A raised scratchpad gets its own. A window that must *not* bow —
+Terminal Delight, which curves its own panes — gets **curvature 0**: an identity
+map that draws no bezel but still claims its pixels, so no neighbour can reach
+them.
+
+The one case left is a surface we cannot see well enough to place, and there is
+exactly one: the lock screen. No rect, no partition, so that monitor gets no
+tubes until it goes.
 
 Other known edges, so they are not surprises: a live drag-resize has no
 per-frame event, so a tube lags the drag and snaps true on release; the list

@@ -525,38 +525,69 @@ source "$root/bin/td-tubes"
 set +eu
 
 tubes="$(tubes_json)"
-assert_eq "only the eligible windows get a tube" "$(jq 'length' <<<"$tubes")" "2"
+
+# THE INVARIANT, stated as a test: every VISIBLE surface claims its own rect.
+# tube_at picks by output pixel, so a surface that is drawn but absent from this
+# list is drawn through whatever rect lies beneath it — and that is the tear.
+# Every "new overlay bug" this project has had was one filter dropping one
+# visible surface: the screensaver (fullscreen), the scratchpad (special
+# workspace), the calculator (over an un-tubed neighbour). The list drops none
+# of them now, so the invariant is the regression test for all of them at once.
+#
+# Fixture: 5 visible (chrome, foot, terminal-delight, screensaver, foot-on-mon2)
+# and 3 correctly absent — an unmapped window, one on a workspace no monitor is
+# showing, and one on a special workspace that is not raised.
+assert_eq "every visible surface claims a rect — none is left to be drawn through another" \
+  "$(jq 'length' <<<"$tubes")" "5"
+assert_eq "…and the invisible ones stay out (unmapped, off-workspace, unraised special)" \
+  "$(jq '[.[] | select(.class=="foot")] | length' <<<"$tubes")" "2"
 assert_eq "most-recently-focused first — the shader takes the first hit" \
   "$(jq -r '.[0].class' <<<"$tubes")" "google-chrome"
 assert_eq "unrotated monitor: origin-shifted and scaled, nothing else" \
-  "$(jq -c '.[] | select(.class=="foot") | [.x,.y,.w,.h]' <<<"$tubes")" "[26,134,1478,2000]"
+  "$(jq -c '.[] | select(.class=="foot" and .mon==0) | [.x,.y,.w,.h]' <<<"$tubes")" "[26,134,1478,2000]"
 # transform 3 against a 1920x1080 mode is (x,y) -> (1920-y, x), both corners,
 # rebuilt axis-aligned. Logical (13,39)+1054x926 therefore lands at
 # (955,13)+926x1054 — w and h swap, which is the whole point.
 assert_eq "rotated monitor: the rect is rotated into buffer space" \
   "$(jq -c '.[] | select(.class=="google-chrome") | [.x,.y,.w,.h]' <<<"$tubes")" "[955,13,926,1054]"
-assert_lacks "terminal-delight is exempt — it warps its own panes" "$tubes" "terminal-delight"
+# Opting out WITHOUT leaving a hole. Terminal Delight warps its own panes, so
+# bending it here would bend it twice — but simply omitting it left its pixels
+# unclaimed and free to be drawn through a neighbouring rect. Curvature 0 is the
+# identity map and draws no bezel, so it opts out of the bow while still owning
+# its pixels.
+assert_eq "terminal-delight is in the list, so nothing else can claim its pixels" \
+  "$(jq '[.[] | select(.class=="terminal-delight")] | length' <<<"$tubes")" "1"
+assert_eq "…and opts out by curvature 0, not by absence" \
+  "$(jq -r '.[] | select(.class=="terminal-delight") | .curv' <<<"$tubes")" "0"
+assert_eq "…while everything else bows" \
+  "$(jq '[.[] | select(.curv != 1)] | length' <<<"$tubes")" "1"
 
-# The regression that a size-only rule caused. omarchy-menu is a full-output
-# layer at level 3 and it is TRANSLUCENT — the desktop shows through it and is
-# supposed to stay bowed. Matching layers by size alone flattened the whole
-# desktop on every menu press, which is worse than the bug being fixed. The
-# fixture carries the menu so that cannot come back.
+# A size-only layer rule flattened the whole desktop on every menu press:
+# omarchy-menu is a full-output level-3 layer and it is TRANSLUCENT, so the
+# desktop shows through and is supposed to stay bowed. The fixture carries the
+# menu so that cannot come back.
 assert_eq "a full-output but translucent layer (the menu) does NOT drop tubes" \
-  "$(jq '[.[] | select(.mon == 0)] | length' <<<"$tubes")" "1"
+  "$(jq '[.[] | select(.mon == 0)] | length' <<<"$tubes")" "2"
 
-# The screensaver artefact. org.omarchy.screensaver is a FULLSCREEN window, so it
-# is already excluded on its own account — and that is exactly why this was
-# missed. The offender is every OTHER tube on that monitor: rects for windows the
-# fullscreen surface is covering, which tube_at still picks by output pixel and
-# warps whatever is drawn on top. Live capture had the fullscreen window straight
-# on the half of the screen no tile occupied and bowed inside a bezel box on the
-# half one did.
-assert_lacks "a fullscreen window gets no tube of its own" "$tubes" "org.omarchy.screensaver"
-assert_eq "…and takes the whole monitor's tubes with it — nothing under it is visible" \
-  "$(jq '[.[] | select(.mon == 2)] | length' <<<"$tubes")" "0"
-assert_eq "…while the monitors it does not cover are untouched" \
-  "$(jq '[.[] | select(.mon != 2)] | length' <<<"$tubes")" "2"
+# The screensaver is a FULLSCREEN window. It used to be excluded "because it has
+# no frame to be a tube for" — and being excluded is precisely what tore it: it
+# was drawn through the rects of the tiles it was covering. It gets its own rect
+# now, and because the list is most-recently-focused first it claims every pixel
+# it covers, so the tubes beneath it are simply never reached.
+assert_eq "a fullscreen window gets a tube of its own rather than being torn by others" \
+  "$(jq '[.[] | select(.class=="org.omarchy.screensaver")] | length' <<<"$tubes")" "1"
+assert_eq "…and the tiles it covers keep theirs, unreachable behind it" \
+  "$(jq '[.[] | select(.mon == 2)] | length' <<<"$tubes")" "2"
+
+# A raised special workspace — the scratchpad — is drawn over the tiles and was
+# dropped by a `.workspace.id > 0` test. Same fixture clients; only the monitor
+# is showing special -99.
+export TD_TEST_FIXTURES="$here/fixtures/tubes-scratchpad"
+scratch="$(tubes_json)"
+assert_eq "a raised scratchpad claims its rect instead of wearing the tile beneath" \
+  "$(jq '[.[] | select(.mon == 0)] | length' <<<"$scratch")" "3"
+assert_eq "…and an unraised one still stays out" \
+  "$(jq '[.[] | select(.mon == 1)] | length' <<<"$scratch")" "1"
 
 # A lock screen is a LAYER, so nothing in `clients -j` can stand for it. Same
 # artefact, different surface. The wallpaper is a full-size layer too, which is
@@ -582,10 +613,16 @@ assert_eq "…and leaves an unlocked monitor alone" \
 export TD_TEST_FIXTURES="$here/fixtures/tubes"
 
 block="$(emit_block "$tubes")"
-assert_has "the baked block declares its count" "$block" "#define TUBE_COUNT 2"
+assert_has "the baked block declares its count" "$block" "#define TUBE_COUNT 5"
 assert_has "rects are floats, not bare ints one driver would reject" "$block" \
   "vec4(955.0, 13.0, 926.0, 1054.0)"
-assert_has "each rect carries the monitor it belongs to" "$block" "1, 0"
+assert_has "each rect carries the monitor it belongs to" "$block" "1, 0, 0, 2, 2"
+# Curvature rides alongside the rect so a surface can claim its pixels without
+# bowing. Floats for the same reason as the rects: a driver that widens ints
+# here is not one to rely on.
+assert_has "each rect carries its curvature, as floats" "$block" "1.0, 1.0, 0.0, 1.0, 1.0"
+assert_has "…declared as a float array" "$block" \
+  "const float TUBE_CURV[TUBE_COUNT] = float[TUBE_COUNT]("
 assert_eq "an empty layout emits no array — GLSL forbids a zero-length one" \
   "$(emit_block '[]' | grep -c 'TUBE_RECT')" "0"
 assert_has "…and still declares the count, so the #if drops the rest" \
