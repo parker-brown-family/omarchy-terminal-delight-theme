@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Film the pointer crossing a tube, so a motion artifact can be looked at
+# instead of guessed at.
+#
+# TWO TRAPS THIS SCRIPT EXISTS TO AVOID, both of which produced confident wrong
+# answers before it was written:
+#
+# 1. grim cannot photograph this class of bug. wlr-screencopy calls
+#    damageMonitor() on every capture and Hyprland promotes that to a full
+#    monitor repaint, so capturing REPAIRS the staleness you are capturing.
+#    gpu-screen-recorder reads the scanout buffer over KMS instead, which is
+#    what the panel is actually showing. (KMS enumeration only finds unrotated
+#    monitors here — `gpu-screen-recorder --list-capture-options` is the truth.)
+#
+# 2. `hyprctl dispatch movecursor X Y` DOES NOTHING on Hyprland 0.56. The
+#    string dispatcher form was dropped; it fails with "')' expected near". A
+#    sweep built on it moves nothing and every measurement taken during it
+#    describes an idle desktop. The Lua form is hl.dsp.cursor.move({x=,y=}),
+#    and the assertion below refuses to run if the pointer did not actually
+#    move, because a silent no-op is what made the earlier readings worthless.
+#
+#   test/probe-trail <monitor> <x1> <x2> <y> [passes] [overlay]
+#
+# Coordinates are Hyprland LOGICAL desktop coordinates (what hyprctl cursorpos
+# prints), not shader pixels.
+set -uo pipefail
+
+MON="${1:-eDP-1}"
+X1="${2:-200}"
+X2="${3:-1700}"
+Y="${4:-560}"
+PASSES="${5:-3}"     # sweeps, not seconds — the sweep rate is what has to stay fixed
+OVERLAY="${6:-no}"
+OUT="/tmp/trail-${MON}.mp4"
+STRIP="/tmp/trail-${MON}-frames"
+
+for c in gpu-screen-recorder ffmpeg hyprctl; do
+  command -v "$c" >/dev/null || { echo "probe-trail: $c required" >&2; exit 1; }
+done
+
+warp() { hyprctl dispatch "hl.dsp.cursor.move({ x = $1, y = $2 })" >/dev/null 2>&1; }
+
+# Prove the pointer obeys us before recording anything.
+before="$(hyprctl cursorpos)"
+warp "$X1" "$Y"
+after="$(hyprctl cursorpos)"
+if [[ "$after" != "$X1, $Y" ]]; then
+  echo "probe-trail: the cursor did not move (asked $X1,$Y — got '$after')." >&2
+  echo "             Every reading taken during a sweep that does not move is" >&2
+  echo "             a reading of an idle desktop. Refusing to record." >&2
+  exit 1
+fi
+
+# Capture the list first: gsr exits non-zero after printing it, and under
+# `set -o pipefail` a pipe into grep reports that exit, not the match.
+caps="$(gpu-screen-recorder --list-capture-options 2>/dev/null)"
+if ! grep -qF -- "${MON}|" <<<"$caps"; then
+  echo "probe-trail: $MON is not KMS-capturable. Offered:" >&2
+  grep -vE '^/dev/video' <<<"$caps" | sed 's/^/  /' >&2
+  exit 1
+fi
+
+rm -rf "$STRIP" "$OUT"
+mkdir -p "$STRIP"
+[[ "$OVERLAY" == yes ]] && hyprctl eval 'hl.config({ debug = { overlay = true } })' >/dev/null
+
+gpu-screen-recorder -w "$MON" -f 60 -cursor yes -q ultra -o "$OUT" 2>/dev/null &
+gsr=$!
+sleep 2.5
+
+# Slow enough that a trail survives into the next frame, repeated so one
+# unlucky pass is not the whole sample.
+span=$((X2 - X1))
+for _ in $(seq "$PASSES"); do
+  for ((i = 0; i <= 60; i++)); do warp $((X1 + span * i / 60)) "$Y"; done
+  for ((i = 60; i >= 0; i--)); do warp $((X1 + span * i / 60)) "$Y"; done
+done
+
+sleep 1
+kill -INT "$gsr" 2>/dev/null
+wait "$gsr" 2>/dev/null
+[[ "$OVERLAY" == yes ]] && hyprctl eval 'hl.config({ debug = { overlay = false } })' >/dev/null
+warp "${before%,*}" "${before#*, }"
+
+[[ -s "$OUT" ]] || { echo "probe-trail: no recording produced" >&2; exit 1; }
+ffmpeg -loglevel error -y -i "$OUT" -vf "fps=10" "$STRIP/f%03d.png" </dev/null
+echo "recording: $OUT"
+echo "frames:    $STRIP ($(find "$STRIP" -name 'f*.png' | wc -l) png)"
