@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
-# Does aiming work? Measure the cursor against the CONTENT, in one frame.
+# Is the MONITOR PASS self-consistent — cursor and content displaced together?
 #
 #   test/probe-aim [monitor]
+#
+# READ THE VERDICT NARROWLY. This does NOT answer "does aiming work", and it
+# cannot: it is circular for the case that actually breaks aiming. It finds a
+# marker's drawn position D, parks the pointer at tube_map(D), and checks the
+# cursor draws at D — which holds whether or not a PER-WINDOW shader is also
+# warping the window's texture underneath. If one is, content is warped twice
+# and the cursor once, aiming is off by exactly that shader's worth, and every
+# number below still comes out clean. Run test/probe-warp-count for that half.
 #
 # The claim the tubes rest on is that the cursor is composited into the buffer
 # BEFORE the screen shader, so cursor and content are displaced by one map and a
@@ -190,11 +198,17 @@ awk -v px="$PX" -v py="$PY" -v dx="$DX" -v dy="$DY" -v tx="$TX" -v ty="$TY" 'BEG
   printf "  cursor - drawn marker : %6.1f,%-6.1f  |%.1f px|   <- aiming error\n", ax, ay, a
   printf "  warp displacement here: %6.1f,%-6.1f  |%.1f px|   <- what a miss would look like\n\n", wx, wy, w
   if (w < 8) { print "  INCONCLUSIVE: too little warp at this spot to tell the two apart."; exit }
-  if (a < w/3) printf "  VERDICT: the cursor rides the warp — aiming at what you see works.\n           Error is %.0f%% of the displacement.\n", 100*a/w
-  else         printf "  VERDICT: the cursor does NOT ride the warp — clicks will miss by ~%.0f px\n           near a corner, outward from where the target appears.\n", w
+  if (a < w/3) printf "  VERDICT: the monitor pass is self-consistent — it displaces cursor and\n           content together. Error is %.0f%% of the displacement.\n", 100*a/w
+  else         printf "  VERDICT: the monitor pass does NOT displace them together — it is warping\n           content by ~%.0f px that the cursor does not follow.\n", w
   print ""
-  print "  Either way your HAND still travels to the true position, which is what"
-  print "  makes a correct warp feel wrong at a corner. Lower it with:"
+  print "  This does NOT mean aiming works. A per-window shader warping the window"
+  print "  underneath would warp content a second time, the cursor not at all, and"
+  print "  leave every number above unchanged. Check that with:"
+  print "      test/probe-warp-count"
+  print ""
+  print "  And even with one warp your HAND travels to the TRUE target position"
+  print "  while your eye sees it pulled inward — which is what makes a correct"
+  print "  warp feel wrong at a corner. Lower it with:"
   print "      td-monitor set TUBE_K1 0.07 TUBE_K2 0.03" }'
 
 cx=$(awk -v a="$DX" -v b="$TX" 'BEGIN{printf "%d",(a+b)/2-260}')

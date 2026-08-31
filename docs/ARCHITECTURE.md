@@ -121,22 +121,43 @@ focus all live — and are tested — in exactly one place.
   runs after the cursor is in the buffer, which is why the tubes live there
   (`td-tubes`). Same reason Terminal Delight's own CRT pass is honest — see
   `warp_screen_to_content`, app/src/pane.rs.
-- **The monitor-pass cursor DOES ride the warp — measured three ways, because
-  the claim gets doubted from the desk and reasonably so.** `test/probe-aim`
-  parks the pointer on a marker's true position and measures where the cursor
-  and the marker are each *drawn*, in one frame: 4.1 px apart against a 54 px
-  warp displacement (8%). Corroborated by the KMS scanout with
-  `gpu-screen-recorder -cursor no` — which draws nothing of its own, so the
-  cursor appearing there at the barrel-mapped position proves it is in the
-  primary framebuffer — and by `modetest -p`, which showed every Cursor-type
-  plane at `crtc=0 fb=0`, i.e. no hardware cursor plane at all.
-  **Three traps sit around this measurement**, each of which produced a
+- **The cursor rides the MONITOR pass — but that alone does not make aiming
+  work, and a probe built to check it can be circular.** The cursor is
+  composited into the primary framebuffer before the screen shader: confirmed by
+  the KMS scanout with `gpu-screen-recorder -cursor no`, which draws nothing of
+  its own, and by `modetest -p` showing every Cursor-type plane at
+  `crtc=0 fb=0`, so no hardware cursor plane is involved.
+  **What that does NOT establish is alignment.** Write the maps out: a
+  per-window shader `W` warps a window's texture, the monitor pass `M` warps the
+  whole buffer, and the cursor is composited *between* them. Content at texture
+  point `T` is drawn at `M⁻¹(W⁻¹(T))`; the cursor at pointer position `C` is
+  drawn at `M⁻¹(C)`. Aligning them visually gives `C = W⁻¹(T)` while a hit needs
+  `C = T` — so **any live per-window warp is a miss of exactly one `W`**, no
+  matter how honest the monitor pass is.
+  `test/probe-aim` cannot see this. It finds a marker's drawn position `D`,
+  parks the pointer at `M(D)`, and confirms the cursor draws at `D` — which is
+  true whether or not `W` exists. It is a test of `M` alone. Read its verdict as
+  "the monitor pass is self-consistent", never as "aiming works".
+  **Three traps sit around measuring any of this**, each of which produced a
   confident wrong answer first: a hover-reactive window repaints CONTENT under
   the pointer, which lands exactly on the barrel prediction and reads as a
-  warped cursor while proving nothing (use a window running `sleep`); a
-  hardware cursor plane is on the panel and in NO capture, so if one were
-  active every screenshot would describe a cursor nobody is looking at; and
+  warped cursor while proving nothing (use a window running `sleep`); a hardware
+  cursor plane would be on the panel and in NO capture; and
   `hyprctl dispatch movecursor` is a silent no-op on 0.56.
+- **A per-window shader survives deleting its file AND `hyprctl reload`. Only a
+  logout drops it.** Measured 2026-08-31 with `test/probe-warp-count`: with
+  `surface.frag` deleted from `~/.config/hypr/shaders/` and after a reload,
+  windows were still bowed with the tubes baked at `TUBE_COUNT 0` — i.e. with
+  the monitor pass an identity, so the bow could only be the window shader.
+  Replacing the file with one whose `TD_K1`/`TD_K2` are `0.0` and reloading did
+  not change it either. **This falsifies the commit message of `fb59fd8`
+  ("`hyprctl reload` arms the warp — the relogin was never needed") and the note
+  it put in `install-curve.sh`.** The older line above — window shaders load once
+  at login — is the one that survived.
+  It is the nastiest shape of bug this repo has hit, because every check is
+  file-based and every file said "off" while the compositor kept running the
+  compiled copy. `td-tubes` and `bin/doctor` now say "no shader on disk" rather
+  than "off", and `install-curve.sh --tubes` tells you to log out.
 - **Correct aim still feels wrong at a corner, and that is not a bug to fix.**
   The click lands, but your HAND travels to the target's TRUE position while
   your EYE sees it pulled inward — up to ~4.25% of the tile at a corner, ~40 px

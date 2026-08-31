@@ -143,6 +143,11 @@ state_report() {
     echo "                                    systemctl --user enable --now td-tubes.service"
     echo "                                  (or run 'td-tubes watch' in a spare terminal)"
   fi
+  # "on disk", NOT "on screen". A per-window shader is compiled at login and
+  # survives both deleting the file and `hyprctl reload` — measured, see
+  # docs/ARCHITECTURE.md. So the file being gone means the NEXT session is clean,
+  # and says nothing about this one. Claiming "off" here is what let a live
+  # double warp sit under a green status line for a whole afternoon.
   if window_warp_live; then
     echo "  per-window warp                 CONFLICT — $(window_warp_dir)/surface.frag is"
     echo "                                  installed and bows every window a second time."
@@ -150,7 +155,11 @@ state_report() {
     echo "                                  clicks drift again. ./install-curve.sh --tubes"
     echo "                                  moves it aside reversibly."
   else
-    echo "  per-window warp                 off — the tubes are the only curve on a window"
+    echo "  per-window warp                 none on disk — but a session that STARTED with"
+    echo "                                  one is still running it: the shader is compiled"
+    echo "                                  at login and survives both rm and hyprctl"
+    echo "                                  reload. Check with test/probe-warp-count;"
+    echo "                                  a logout is the only way to drop it."
   fi
 }
 

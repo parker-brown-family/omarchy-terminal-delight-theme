@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# How many warps are on this screen — one, or two?
+#
+#   test/probe-warp-count [monitor]
+#
+# Two pictures of the SAME window, one with the tubes baked and one with them
+# baked at zero, and a human looks at them. That is not laziness. Three
+# automated attempts at this question gave three answers on one afternoon:
+#
+#   * a cursor-vs-prediction probe that was measuring a Chrome HOVER HIGHLIGHT
+#     (content, therefore warped, therefore landing exactly on the prediction);
+#   * test/probe-aim, which is algebraically circular for this question — it
+#     parks the pointer at M(drawn marker) and confirms the cursor draws at the
+#     drawn marker, which holds whether or not a second warp exists;
+#   * a sag measurement that failed its own positive control, reporting
+#     "straight, sag 0.0 px" for a window that was visibly bowed by a tube.
+#
+# The pictures were right every time. So the pictures are the instrument, and
+# the only automation here is producing them from a window that holds still.
+#
+# WHAT TO LOOK FOR. The window is filled with full-width horizontal rules.
+#   tubes ON  : rules bowed, a black bezel band inside the square frame — normal.
+#   tubes OFF : rules DEAD STRAIGHT  -> one warp. The tubes are the only curve.
+#               rules STILL BOWED    -> TWO warps. A per-window shader is live.
+#
+# TWO WARPS IS THE BUG BEHIND "CLICKS MISS". Content is warped by both, the
+# cursor only by the monitor pass (it is composited between them), so aiming at
+# what you see is off by exactly one per-window warp — outward, worst at a
+# corner. See docs/ARCHITECTURE.md.
+#
+# AND IT CANNOT BE FIXED WITHOUT LOGGING OUT. A per-window shader is compiled at
+# login and survives deleting the file and `hyprctl reload` alike, so every
+# file-based check reports "off" while the warp is on the screen. That is the
+# whole reason this probe exists.
+set -uo pipefail
+
+MON="${1:-eDP-1}"
+for c in hyprctl jq grim magick foot systemctl; do
+  command -v "$c" >/dev/null || { echo "probe-warp-count: $c required" >&2; exit 1; }
+done
+
+WAS_ACTIVE="$(systemctl --user is-active td-tubes.service 2>/dev/null || true)"
+cleanup() {
+  local a; a="$(hyprctl clients -j | jq -r '.[] | select(.class=="tdwarp") | .address')"
+  [ -n "$a" ] && hyprctl dispatch "hl.dsp.window.close({ window = \"address:$a\" })" >/dev/null 2>&1
+  [ "$WAS_ACTIVE" = active ] && systemctl --user start td-tubes.service >/dev/null 2>&1
+  rm -f /tmp/tdwarp.sh
+  return 0
+}
+trap cleanup EXIT
+
+# Full-width rules with gaps. A straight line is obvious and so is a bowed one,
+# which is the entire point — and the window runs `sleep`, so nothing in it
+# repaints between the two captures.
+cat >/tmp/tdwarp.sh <<'SH'
+printf '\033[2J\033[H'
+for _ in $(seq 1 12); do printf '\033[7m%*s\033[0m\n\n\n' 400 ''; done
+exec sleep 600
+SH
+hyprctl dispatch 'hl.window_rule({ match = { class = "^tdwarp$" }, float = true, size = "1000 760" })' >/dev/null 2>&1
+hyprctl dispatch 'hl.dsp.exec_cmd("foot -a tdwarp bash /tmp/tdwarp.sh")' >/dev/null 2>&1
+sleep 4
+
+read -r WX WY WW WH < <(hyprctl clients -j |
+  jq -r '.[] | select(.class=="tdwarp") | "\(.at[0]) \(.at[1]) \(.size[0]) \(.size[1])"')
+[ -n "${WX:-}" ] || { echo "probe-warp-count: the probe window never appeared" >&2; exit 1; }
+read -r MX MY MS < <(hyprctl -j monitors | jq -r --arg m "$MON" '.[] | select(.name==$m) | "\(.x) \(.y) \(.scale)"')
+[ -n "${MX:-}" ] || { echo "probe-warp-count: no monitor called $MON" >&2; exit 1; }
+
+# Margin, so the square frame and the black bezel band are both in shot.
+cx=$(( (WX - MX) * MS - 40 )); cy=$(( (WY - MY) * MS - 40 ))
+cw=$(( WW * MS + 80 ));        ch=$(( WH * MS + 80 ))
+tubes() { grep -m1 'define TUBE_COUNT' "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme/crt-glass.frag"; }
+shot() { grim -o "$MON" /tmp/warpcount-full.png
+         magick /tmp/warpcount-full.png -crop "${cw}x${ch}+${cx}+${cy}" +repage -resize 62% "$1"; }
+
+systemctl --user start td-tubes.service >/dev/null 2>&1
+sleep 3
+echo "A  tubes ON   $(tubes)"
+shot /tmp/warpcount-tubes-on.png
+
+# Stopping the unit runs `td-tubes off` via ExecStopPost, which bakes zero tubes.
+systemctl --user stop td-tubes.service >/dev/null 2>&1
+sleep 3
+echo "B  tubes OFF  $(tubes)"
+shot /tmp/warpcount-tubes-off.png
+
+cat <<EOF
+
+  /tmp/warpcount-tubes-on.png    rules bowed + black bezel inside a square frame
+  /tmp/warpcount-tubes-off.png   <- THIS is the one that answers the question
+
+  straight in B  ->  one warp. The tubes are the only curve; aiming is correct.
+  bowed    in B  ->  two warps. A per-window shader is compiled into this
+                     session. Clicks miss by one warp's worth, outward, worst at
+                     a corner. LOG OUT to drop it — nothing short of that will,
+                     and every file-based check will keep saying "off".
+EOF

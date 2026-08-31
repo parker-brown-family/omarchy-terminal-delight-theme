@@ -169,6 +169,19 @@ if [[ -n $TUBES ]]; then
   done
   $moved || echo "no per-window warp installed — nothing to move aside"
   rmdir "$DISABLED_DIR" 2>/dev/null || true
+  # Moving the file is not the same as stopping the shader. Hyprland compiles a
+  # per-window shader at login and keeps it: measured on 0.56.2, a window is
+  # still bowed with the file deleted, after `hyprctl reload`, and with the tubes
+  # baked at zero. Say so here, because everything else a user can check is
+  # file-based and will cheerfully report "off" while the warp is on the screen.
+  if $moved; then
+    echo
+    echo "  NOTE: the running Hyprland still has the old shader compiled in, and"
+    echo "        neither the move above nor the reload below drops it. Until you"
+    echo "        LOG OUT, windows are warped twice — once by that shader and once"
+    echo "        by the tubes — and clicks will land off by the first warp."
+    echo "        Verify with: test/probe-warp-count"
+  fi
 else
   for f in surface.frag ext.frag; do
     [[ -f "$here/shaders/$f" ]] || { echo "missing $here/shaders/$f" >&2; exit 1; }
