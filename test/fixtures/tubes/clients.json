@@ -11,9 +11,13 @@
     "size": [960, 540], "workspace": { "id": 1, "name": "1" },
     "mapped": true, "hidden": false, "fullscreen": 0, "focusHistoryID": 2 },
 
-  { "class": "foot", "address": "0xf2", "monitor": 0, "at": [0, 0],
-    "size": [1920, 1080], "workspace": { "id": 1, "name": "1" },
+  { "class": "org.omarchy.screensaver", "address": "0xf2", "monitor": 2, "at": [0, 0],
+    "size": [1600, 900], "workspace": { "id": 3, "name": "3" },
     "mapped": true, "hidden": false, "fullscreen": 2, "focusHistoryID": 3 },
+
+  { "class": "foot", "address": "0xf6", "monitor": 2, "at": [10, 10],
+    "size": [780, 880], "workspace": { "id": 3, "name": "3" },
+    "mapped": true, "hidden": false, "fullscreen": 0, "focusHistoryID": 7 },
 
   { "class": "foot", "address": "0xf3", "monitor": 0, "at": [0, 0],
     "size": [100, 100], "workspace": { "id": 9, "name": "9" },

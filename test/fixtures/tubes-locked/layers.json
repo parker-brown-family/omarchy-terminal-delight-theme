@@ -1,0 +1,19 @@
+{
+  "eDP-1": {
+    "levels": {
+      "0": [ { "namespace": "omarchy-background", "x": 0, "y": 0, "w": 1920, "h": 1080 } ],
+      "1": [],
+      "2": [ { "namespace": "omarchy-bar", "x": 0, "y": 0, "w": 1920, "h": 26 } ],
+      "3": [ { "namespace": "hyprlock", "x": 0, "y": 0, "w": 1920, "h": 1080 } ]
+    }
+  },
+  "DP-1": {
+    "levels": {
+      "0": [ { "namespace": "omarchy-background", "x": 0, "y": 0, "w": 1080, "h": 1920 } ],
+      "1": [],
+      "2": [],
+      "3": [ { "namespace": "omarchy-notification", "x": 700, "y": 20, "w": 360, "h": 120 } ]
+    }
+  },
+  "HDMI-A-1": { "levels": { "0": [], "1": [], "2": [], "3": [] } }
+}

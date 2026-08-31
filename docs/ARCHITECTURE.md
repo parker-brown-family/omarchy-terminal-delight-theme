@@ -144,6 +144,19 @@ focus all live — and are tested — in exactly one place.
   warped cursor while proving nothing (use a window running `sleep`); a hardware
   cursor plane would be on the panel and in NO capture; and
   `hyprctl dispatch movecursor` is a silent no-op on 0.56.
+- **A tube outlives what it is a tube FOR, and the monitor pass cannot tell.**
+  `tube_at` picks by output pixel, so a rect left baked under something that
+  covers it warps whatever is drawn on top. The screensaver
+  (`org.omarchy.screensaver`, a fullscreen window) came out with the tiles curved
+  into it — straight on the half of the screen no tile occupied, bowed inside a
+  bezel box on the half one did. The fullscreen window was already excluded on
+  its own account, which is precisely why this was missed: **the offender is
+  every OTHER tube on that monitor.** Same for a lock screen, which is a *layer*
+  and therefore invisible to `clients -j` entirely. `tubes_json` now drops every
+  tube on a monitor that has a fullscreen window on its active workspace, or a
+  layer covering the output — levels 2 and 3 only, since the wallpaper is a
+  full-size layer that sits *under* the windows. `watch` listens for
+  `openlayer`/`closelayer` so a lock screen re-bakes.
 - **A per-window shader survives deleting its file AND `hyprctl reload`. Only a
   logout drops it.** Measured 2026-08-31 with `test/probe-warp-count`: with
   `surface.frag` deleted from `~/.config/hypr/shaders/` and after a reload,
