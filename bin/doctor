@@ -218,12 +218,17 @@ else
   # Both tiers at once is the one combination that is worse than either: the
   # content is bowed twice and the cursor once, so the drift the tubes remove
   # comes back. This is the check that would have caught it by name.
+  # Deliberately NOT reported as "off": a per-window shader is compiled at login
+  # and outlives both `rm` and `hyprctl reload`, so the file says what the NEXT
+  # session gets, not this one. Nothing on disk can tell them apart.
   if [[ -f "$CONFIG/hypr/shaders/surface.frag" ]]; then
     err "the per-window warp is installed alongside the tubes" \
         "windows are bowed twice, the cursor once — clicks will miss again" \
         "./install-curve.sh --tubes"
   else
-    ok "the per-window warp is out of the way — one curve per window"
+    note "no per-window shader on disk — the next session is clean. A session that"
+    note "  STARTED with one is still running it (compiled at login, survives rm and"
+    note "  reload): check with test/probe-warp-count, and log out to drop it."
   fi
 
   if [[ $HYPR -eq 1 ]]; then
