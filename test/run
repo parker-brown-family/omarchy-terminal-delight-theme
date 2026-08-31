@@ -556,6 +556,50 @@ assert_has "…and still declares the count, so the #if drops the rest" \
 assert_eq "the frag ships with no tubes of its own" \
   "$(grep -c '^#define TUBE_COUNT 0$' "$root/crt-glass.frag")" "1"
 
+# The state the tubes are only correct UNDER. Both of these were invisible
+# until they produced artefacts nobody could name: a snapshot with no watcher
+# rots on the next layout change, and the per-window warp left installed bows
+# every window a second time while the cursor is bowed once — which is the
+# click drift the tubes were built to remove, reintroduced.
+# The suite already seeds surface.frag up top, as install-curve.sh would leave
+# it — so the conflict is the state we are ALREADY in here, and the clear case
+# is the one that has to be arranged.
+assert_eq "surface.frag present IS the conflict — both tiers bow the same window" \
+  "$(window_warp_live && echo conflict || echo clear)" "conflict"
+assert_has "…and the report says so, with the way out" "$(state_report)" "CONFLICT"
+mv "$XDG_CONFIG_HOME/hypr/shaders/surface.frag" "$T/warp.away"
+assert_eq "moved aside, as --tubes does, reads as no conflict" \
+  "$(window_warp_live && echo conflict || echo clear)" "clear"
+mv "$T/warp.away" "$XDG_CONFIG_HOME/hypr/shaders/surface.frag"
+
+# A missing watcher must be LOUD. This is the whole failure mode: `apply` looks
+# like it worked, and stays looking that way while the rects rot.
+watcher_running() { return 1; }
+assert_has "a missing watcher is reported, not assumed" "$(state_report)" "NOT RUNNING"
+assert_has "…and names the command that fixes it" "$(state_report)" "systemctl --user enable --now"
+watcher_running() { return 0; }
+assert_lacks "a running watcher says nothing alarming" "$(state_report)" "NOT RUNNING"
+
+# The socket lookup has to survive systemd, which does not hand a user unit
+# Hyprland's environment. Under `set -u` the old form died on an unbound
+# HYPRLAND_INSTANCE_SIGNATURE — i.e. the unit could never have worked.
+XDG_RUNTIME_DIR="$T/run" HYPRLAND_INSTANCE_SIGNATURE="" hypr_event_socket >/dev/null 2>&1
+assert_eq "no compositor: fails cleanly rather than crashing on an unset signature" "$?" "1"
+assert_has "…and says which directory it looked in" "$SOCK_ERR" "$T/run/hypr"
+
+# The unit file, checked by systemd itself rather than by eye. systemd only
+# WARNS about a key in the wrong section and then ignores it, so a misplaced
+# StartLimitIntervalSec costs you the rate limit and says nothing at the point
+# of use — which is exactly what happened when this was written.
+if command -v systemd-analyze >/dev/null 2>&1; then
+  sed "s|@TD_TUBES@|/bin/true|g" "$root/systemd/td-tubes.service" >"$T/td-tubes.service"
+  unit_out="$(systemd-analyze verify "$T/td-tubes.service" 2>&1)"
+  assert_lacks "the unit has no keys in the wrong section" "$unit_out" "Unknown key"
+  assert_lacks "…and no unit-file syntax errors" "$unit_out" "Failed to parse"
+else
+  printf '  \033[90m–\033[0m systemd-analyze absent — unit file not verified here\n'
+fi
+
 echo
 if [[ "$fail" -eq 0 ]]; then
   printf '\033[32mall %d green\033[0m\n' "$pass"
