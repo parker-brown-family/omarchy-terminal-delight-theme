@@ -3,6 +3,9 @@
 #
 #   test/probe-warp-count [monitor]
 #
+# The monitor is worked out from where the probe window lands. Name one only to
+# override that.
+#
 # Two pictures of the SAME window, one with the tubes baked and one with them
 # baked at zero, and a human looks at them. That is not laziness. Three
 # automated attempts at this question gave three answers on one afternoon:
@@ -34,15 +37,24 @@
 # whole reason this probe exists.
 set -uo pipefail
 
-MON="${1:-eDP-1}"
+# Discovered from where the probe window actually lands, because eDP-1 is a
+# guess and it is wrong on any box whose panel enumerated second. Pass a name
+# to override.
+MON="${1:-}"
 for c in hyprctl jq grim magick foot systemctl; do
   command -v "$c" >/dev/null || { echo "probe-warp-count: $c required" >&2; exit 1; }
 done
 
 WAS_ACTIVE="$(systemctl --user is-active td-tubes.service 2>/dev/null || true)"
 cleanup() {
-  local a; a="$(hyprctl clients -j | jq -r '.[] | select(.class=="tdwarp") | .address')"
-  [ -n "$a" ] && hyprctl dispatch "hl.dsp.window.close({ window = \"address:$a\" })" >/dev/null 2>&1
+  # EVERY tdwarp window, not the first one jq happens to print. A run that dies
+  # before its trap leaves one behind, the next run leaves another, and they
+  # stack: three of them were live at once here, each baking its own tube, which
+  # is a probe quietly measuring a screen it is itself cluttering.
+  local a
+  while read -r a; do
+    [ -n "$a" ] && hyprctl dispatch "hl.dsp.window.close({ window = \"address:$a\" })" >/dev/null 2>&1
+  done < <(hyprctl clients -j | jq -r '.[] | select(.class=="tdwarp") | .address')
   [ "$WAS_ACTIVE" = active ] && systemctl --user start td-tubes.service >/dev/null 2>&1
   rm -f /tmp/tdwarp.sh
   return 0
@@ -61,18 +73,47 @@ hyprctl dispatch 'hl.window_rule({ match = { class = "^tdwarp$" }, float = true,
 hyprctl dispatch 'hl.dsp.exec_cmd("foot -a tdwarp bash /tmp/tdwarp.sh")' >/dev/null 2>&1
 sleep 4
 
-read -r WX WY WW WH < <(hyprctl clients -j |
-  jq -r '.[] | select(.class=="tdwarp") | "\(.at[0]) \(.at[1]) \(.size[0]) \(.size[1])"')
+read -r WX WY WW WH WMON < <(hyprctl clients -j |
+  jq -r '.[] | select(.class=="tdwarp") | "\(.at[0]) \(.at[1]) \(.size[0]) \(.size[1]) \(.monitor)"')
 [ -n "${WX:-}" ] || { echo "probe-warp-count: the probe window never appeared" >&2; exit 1; }
-read -r MX MY MS < <(hyprctl -j monitors | jq -r --arg m "$MON" '.[] | select(.name==$m) | "\(.x) \(.y) \(.scale)"')
+
+# Ask the window where it is rather than assuming it honoured a focusmonitor:
+# an exec'd window does not reliably land on the monitor you just focused, and
+# a shot of the wrong monitor answers a question nobody asked.
+[ -n "$MON" ] || MON="$(hyprctl monitors -j |
+  jq -r --argjson i "$WMON" '.[] | select(.id==$i) | .name')"
+[ -n "$MON" ] || { echo "probe-warp-count: could not name the probe window's monitor" >&2; exit 1; }
+
+# The monitor's LOGICAL box. transform 1/3/5/7 stand the panel on its side, so
+# the logical box is the mode with its sides swapped — a portrait monitor whose
+# mode is 1920x1080 is 1080x1920 to everything below.
+read -r MX MY MW MH < <(hyprctl monitors -j | jq -r --arg m "$MON" '
+  .[] | select(.name==$m)
+  | (if (.transform % 2) == 1 then [.height, .width] else [.width, .height] end) as $d
+  | "\(.x) \(.y) \($d[0] / .scale) \($d[1] / .scale)"')
 [ -n "${MX:-}" ] || { echo "probe-warp-count: no monitor called $MON" >&2; exit 1; }
 
-# Margin, so the square frame and the black bezel band are both in shot.
-cx=$(( (WX - MX) * MS - 40 )); cy=$(( (WY - MY) * MS - 40 ))
-cw=$(( WW * MS + 80 ));        ch=$(( WH * MS + 80 ))
+# Margin, so the square frame and the black bezel band are both in shot, then
+# clamped to the monitor because grim refuses a region that leaves the output.
+#
+# `grim -g` speaks LOGICAL global coordinates, which is why none of this
+# multiplies by scale any more. The old crop did, in shell arithmetic, and
+# shell arithmetic is integer: a monitor at scale 1.6 died on the spot with
+# `1.6: syntax error`, and where it did survive it was addressing the buffer
+# while grim had already handed back the rotated output.
+read -r GX GY GW GH < <(awk -v wx="$WX" -v wy="$WY" -v ww="$WW" -v wh="$WH" \
+                            -v mx="$MX" -v my="$MY" -v mw="$MW" -v mh="$MH" 'BEGIN {
+    m = 40
+    x = wx - m; y = wy - m; w = ww + 2*m; h = wh + 2*m
+    if (x < mx)           { w -= (mx - x); x = mx }
+    if (y < my)           { h -= (my - y); y = my }
+    if (x + w > mx + mw)  { w = mx + mw - x }
+    if (y + h > my + mh)  { h = my + mh - y }
+    printf "%d %d %d %d\n", x, y, w, h
+  }')
+
 tubes() { grep -m1 'define TUBE_COUNT' "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme/crt-glass.frag"; }
-shot() { grim -o "$MON" /tmp/warpcount-full.png
-         magick /tmp/warpcount-full.png -crop "${cw}x${ch}+${cx}+${cy}" +repage -resize 62% "$1"; }
+shot() { grim -g "${GX},${GY} ${GW}x${GH}" - | magick png:- -resize 62% "$1"; }
 
 systemctl --user start td-tubes.service >/dev/null 2>&1
 sleep 3
