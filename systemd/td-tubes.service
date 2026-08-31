@@ -11,6 +11,11 @@ PartOf=graphical-session.target
 After=graphical-session.target
 # Nothing to watch without a compositor, and nothing to do on a text console.
 ConditionEnvironment=XDG_RUNTIME_DIR
+# These two live in [Unit], not [Service]. systemd only warns about the wrong
+# section and carries on, so getting it wrong costs you the rate limit silently:
+# "Unknown key 'StartLimitIntervalSec' in section [Service], ignoring."
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -25,8 +30,6 @@ ExecStopPost=-@TD_TUBES@ off
 # from spinning forever instead of failing visibly in the journal.
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 [Install]
 WantedBy=graphical-session.target

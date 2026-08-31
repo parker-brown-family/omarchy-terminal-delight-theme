@@ -587,6 +587,19 @@ XDG_RUNTIME_DIR="$T/run" HYPRLAND_INSTANCE_SIGNATURE="" hypr_event_socket >/dev/
 assert_eq "no compositor: fails cleanly rather than crashing on an unset signature" "$?" "1"
 assert_has "…and says which directory it looked in" "$SOCK_ERR" "$T/run/hypr"
 
+# The unit file, checked by systemd itself rather than by eye. systemd only
+# WARNS about a key in the wrong section and then ignores it, so a misplaced
+# StartLimitIntervalSec costs you the rate limit and says nothing at the point
+# of use — which is exactly what happened when this was written.
+if command -v systemd-analyze >/dev/null 2>&1; then
+  sed "s|@TD_TUBES@|/bin/true|g" "$root/systemd/td-tubes.service" >"$T/td-tubes.service"
+  unit_out="$(systemd-analyze verify "$T/td-tubes.service" 2>&1)"
+  assert_lacks "the unit has no keys in the wrong section" "$unit_out" "Unknown key"
+  assert_lacks "…and no unit-file syntax errors" "$unit_out" "Failed to parse"
+else
+  printf '  \033[90m–\033[0m systemd-analyze absent — unit file not verified here\n'
+fi
+
 echo
 if [[ "$fail" -eq 0 ]]; then
   printf '\033[32mall %d green\033[0m\n' "$pass"
