@@ -722,6 +722,56 @@ assert_eq "a session lock drops that monitor's tubes, seen only via solitaryBloc
   "$(jq '[.[] | select(.mon == 0)] | length' <<<"$slock")" "0"
 assert_eq "…and leaves an unlocked monitor alone" \
   "$(jq '[.[] | select(.mon == 1)] | length' <<<"$slock")" "1"
+
+# THE DISJOINTNESS PROPERTY, swept over every fixture rather than spot-checked.
+#
+# The clip above is asserted on one rect, which proves the arithmetic and not
+# the property. This walks all pairs on each monitor and counts the ones that
+# can ACTUALLY duplicate content, so a new surface class that reintroduces the
+# overlap fails here instead of arriving as a photograph.
+#
+# Three cases, and only one of them is a bug:
+#   disjoint            safe.
+#   fully contained     safe — the higher tube owns every pixel of the lower, so
+#                       the map underneath is never evaluated at all.
+#   PARTIAL overlap     a bug ONLY if the lower tube is bowed. At curvature 0 the
+#                       map is the identity, which cannot reach outside the pixel
+#                       it is drawn at, so a flat tube partially covered still
+#                       shows each source row exactly once. That is why the bar
+#                       (flat) sitting over a window is fine while a notification
+#                       over a bowed window is not.
+dup_pairs() {
+  jq '
+    def isect($a; $b):
+      ([$a.x, $b.x] | max) as $x0 | ([$a.x+$a.w, $b.x+$b.w] | min) as $x1
+      | ([$a.y, $b.y] | max) as $y0 | ([$a.y+$a.h, $b.y+$b.h] | min) as $y1
+      | $x1 > $x0 and $y1 > $y0;
+    def contains($h; $l):
+      $h.x <= $l.x and $h.y <= $l.y
+      and ($h.x+$h.w) >= ($l.x+$l.w) and ($h.y+$h.h) >= ($l.y+$l.h);
+    . as $t
+    | [ range(0; length) as $i | range($i+1; length) as $j
+        | select($t[$i].mon == $t[$j].mon)
+        | select($t[$j].curv != 0)
+        | select(isect($t[$i]; $t[$j]))
+        | select(contains($t[$i]; $t[$j]) | not) ] | length'
+}
+export TD_TEST_FIXTURES="$here/fixtures/tubes"
+assert_eq "no tube can duplicate another: bar, menu and windows together are clean" \
+  "$(tubes_json | dup_pairs)" "0"
+
+# The two that remain are both the SAME known gap — a partially-covering surface
+# that is not edge chrome, so the clip cannot subtract it as a rect. Tracked as
+# issue #39. Pinned by count so the pair cannot quietly become three.
+export TD_TEST_FIXTURES="$here/fixtures/tubes-locked"
+assert_eq "a small overlay over a bowed window still duplicates — issue #39, pinned" \
+  "$(tubes_json | dup_pairs)" "1"
+export TD_TEST_FIXTURES="$here/fixtures/tubes-scratchpad"
+assert_eq "…and so does a raised scratchpad over a bowed tile — same gap, same issue" \
+  "$(tubes_json | dup_pairs)" "1"
+export TD_TEST_FIXTURES="$here/fixtures/tubes-sessionlock"
+assert_eq "…while a monitor with no tubes at all has nothing to overlap" \
+  "$(tubes_json | dup_pairs)" "0"
 export TD_TEST_FIXTURES="$here/fixtures/tubes"
 
 block="$(emit_block "$tubes")"
