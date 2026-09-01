@@ -9,6 +9,30 @@ every window, not just one app's.
 
 ![preview](preview.png)
 
+> [!WARNING]
+> **The warp is in development.** The colours, the palettes and the paint
+> picker are solid; the barrel warp is the part still being built, and it is
+> worth knowing what you are signing up for before you install it.
+>
+> Known and visible today:
+>
+> - An overlay — a menu, a notification, a picker — is drawn under the old tube
+>   layout for a fraction of a second before the shader is rebuilt, so it can
+>   tear or flash on the way in and then snap clean.
+> - While one of those overlays is up, the desktop behind it stops bowing. That
+>   is deliberate; it is the only way the overlay itself comes out whole.
+> - Two surfaces that overlap can show the covered strip twice.
+>
+> **Some of this may not be fixable here.** The warp is a single gather over the
+> finished frame: it only ever sees pixels that are already composited, so it
+> cannot pull an overlay apart from the desktop blended into the same pixels.
+> The same constraint is why a per-window warp can never be click-correct — see
+> [Constraints bought with bruises](docs/ARCHITECTURE.md#constraints-bought-with-bruises).
+>
+> None of it touches your data or your session, and
+> `./install-curve.sh --uninstall` puts everything back. Reports and pictures
+> are very welcome.
+
 **Paint every terminal its own identity.** The 🎨 workspace picker floats a
 card over each tile holding every Omarchy theme on the machine; one click
 paints that tile — palette, border and all — and two switches beside it crank
@@ -84,15 +108,29 @@ So the curve ships as a script you run yourself, after you have read it:
 ```bash
 git clone https://github.com/parker-brown-family/omarchy-terminal-delight-theme
 cd omarchy-terminal-delight-theme
-./install-curve.sh          # then log out and back in
+./install-curve.sh
 ```
 
-It copies the two shaders into `~/.config/hypr/shaders/` and writes one marked
-block into your `~/.config/hypr/looknfeel.lua` — the rounding and blur the warp
-is drawn for. Both are reversed by `./install-curve.sh --uninstall`.
+That writes one marked block into your `~/.config/hypr/looknfeel.lua` — the
+rounding and blur the warp is drawn for — and arms the **monitor pass**, which
+is the tier where a click lands where you aimed. It also installs
+`td-tubes.service`, the watcher that keeps the warp in step with your layout.
+All of it is reversed by `./install-curve.sh --uninstall`.
 
-**Log out and back in.** Hyprland reads its shaders once at startup
-(`m_shadersInitialized`, 0.56); editing them on a running session does nothing.
+The monitor pass swaps live, so `hyprctl reload` is enough and the installer
+runs it for you. **The other tier needs a logout**, which is the one thing to
+know if you choose it:
+
+```bash
+./install-curve.sh --per-window   # then log out and back in
+```
+
+That is the older warp — cheap, needs nothing running, and permanently off by
+~1.7% of a window width at the rim and ~4.25% at a corner, because it is drawn
+before the cursor is composited. It is kept for a box with no systemd or no
+`socat`. Hyprland reads per-window shaders once at startup
+(`m_shadersInitialized`, 0.56), so editing them on a running session does
+nothing — hence the logout.
 
 ## The monitor has knobs
 
@@ -199,13 +237,17 @@ tile, baked into `crt-glass.frag` as constants, recompiled when the layout
 changes.
 
 ```bash
-./install-curve.sh --tubes    # instead of the plain install
-td-tubes                      # what would be baked now, and the state it needs
+./install-curve.sh    # this is the default tier
+td-tubes              # what would be baked now, and the state it needs
 ```
 
+This is what a plain `./install-curve.sh` gives you. It used to be behind
+`--tubes`, which is still accepted and now does nothing.
+
 Pick one tier. Running both bows every window twice while the cursor is bowed
-once, which brings the drift straight back — so `--tubes` moves the per-window
-shaders into `shaders/disabled-by-td-tubes/`, and `--uninstall` puts them back.
+once, which brings the drift straight back — so the monitor pass moves the
+per-window shaders into `shaders/disabled-by-td-tubes/`, and `--uninstall` puts
+them back.
 
 **The tubes need two things running, and `td-tubes` reports on both** rather
 than leaving you to guess when the picture looks wrong:
@@ -454,8 +496,8 @@ what it buys under `--as-themes`: `omarchy-theme-set` only strips Lua from a
 theme carrying its own `.git` (`omarchy-theme-set:207`). A variant theme
 generated on your machine has none — so it keeps its `hyprland.lua`, and the
 rounding, blur and screen shader come with it. **A variant built as a theme is
-curved out of the box.** Only the per-window warp is still a separate step,
-because those shaders live in Hyprland's config rather than in any theme:
+curved out of the box.** Only the warp itself is still a separate step, because
+it lives in Hyprland's config rather than in any theme:
 
 ```bash
 ./install-curve.sh    # once; it reloads Hyprland for you

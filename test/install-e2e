@@ -144,6 +144,17 @@ done
 [[ -n $extras ]] && printf '    also staged (harmless, never executed): %s\n' "$extras"
 
 echo "— the curve installer, on the theme this install produced"
+# systemctl is stubbed BEFORE the first install and not further down, because it
+# is the one command in this file that could reach the REAL user manager:
+# `--user enable --now` talks to it over D-Bus, and the manager reads its own
+# environment rather than this sandbox. An unstubbed run could start the
+# caller's live service. It used to be stubbed only for the --tubes section,
+# which was safe for exactly as long as the plain install did not install a
+# watcher — i.e. until the default flipped to the monitor pass.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/systemctl.log"\nexit 0\n' \
+  "$T/log" >"$T/stubs/systemctl"
+chmod +x "$T/stubs/systemctl"
+
 curve_out="$(bash "$theme/install-curve.sh" 2>&1)"
 looknfeel="$HOME/.config/hypr/looknfeel.lua"
 if grep -qF "The theme's own hyprland.lua is staged" <<<"$curve_out"; then
@@ -161,25 +172,34 @@ else
   no "--uninstall left the block behind"
 fi
 
-echo "— the other tier: --tubes, which must not leave both warps installed"
-# systemctl is stubbed HERE and not with the others above because it is the one
-# command in this file that could reach the REAL user manager: `--user enable
-# --now` talks to it over D-Bus, and the manager reads its own environment, not
-# this sandbox's. An unstubbed run could start the caller's live service.
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/systemctl.log"\nexit 0\n' \
-  "$T/log" >"$T/stubs/systemctl"
-chmod +x "$T/stubs/systemctl"
-
+echo "— the DEFAULT tier: the monitor pass, which must not leave both warps installed"
+# No flag. The monitor pass is what a plain install now gives you, because the
+# older tier is drawn before the cursor is composited and is therefore off by
+# ~1.7% of a window width at the rim whatever you tune — a miss you cannot opt
+# out of is a poor default. This block used to pass --tubes; that flag is now an
+# accepted no-op, asserted below so older notes keep working.
 shaders="$HOME/.config/hypr/shaders"
 mkdir -p "$shaders"
 printf 'pretend this is the users own\n' >"$shaders/surface.frag"
-tubes_out="$(bash "$theme/install-curve.sh" --tubes 2>&1)"
+# Start this scenario with an empty call log. The assertions below are about
+# what THIS install did — enable, and pointedly not --now — and the log is
+# cumulative across the file. The first install above legitimately starts the
+# watcher, because that run found no per-window shader to move aside and so
+# nothing stale was compiled into the session; leaving its `--now` in the log
+# would read here as the double-warp this scenario exists to forbid.
+: >"$T/log/systemctl.log"
+tubes_out="$(bash "$theme/install-curve.sh" 2>&1)"
 
 if [[ ! -f "$shaders/surface.frag" && -f "$shaders/disabled-by-td-tubes/surface.frag" ]]; then
-  ok "--tubes moved the per-window warp aside — one curve per window, not two"
+  ok "a plain install moves the per-window warp aside — one curve per window, not two"
 else
-  no "--tubes left surface.frag installed: content would bow twice, the cursor once"
+  no "the default left surface.frag installed: content would bow twice, the cursor once"
   printf '%s\n' "$tubes_out" | sed 's/^/      /'
+fi
+if grep -qF "IN DEVELOPMENT" <<<"$tubes_out"; then
+  ok "…and says the warp is in development, where the installer is actually read"
+else
+  no "the installer shipped the warp without saying it is unfinished"
 fi
 
 unit="$HOME/.config/systemd/user/td-tubes.service"
@@ -208,6 +228,33 @@ if bash "$theme/install-curve.sh" --uninstall >/dev/null 2>&1 &&
   ok "…and --uninstall gives the user their own shader back"
 else
   no "--uninstall kept a file it did not create"
+fi
+
+echo "— the other tier: --per-window, still reachable for a box without systemd"
+pw_out="$(bash "$theme/install-curve.sh" --per-window 2>&1)"
+if [[ -f "$shaders/surface.frag" ]] && grep -q 'terminal-delight' "$shaders/surface.frag"; then
+  ok "--per-window installs the per-window warp instead of the monitor pass"
+else
+  no "--per-window installed no per-window shader"
+  printf '%s\n' "$pw_out" | sed 's/^/      /'
+fi
+if [[ ! -d "$shaders/disabled-by-td-tubes" ]]; then
+  ok "…and moves nothing aside, because there is no second warp to conflict with"
+else
+  no "--per-window created the disabled dir, which only the monitor pass should"
+fi
+if [[ ! -f "$HOME/.config/systemd/user/td-tubes.service" ]]; then
+  ok "…and installs no watcher, which that tier does not need"
+else
+  no "--per-window wrote a watcher unit for a tier that bakes no tubes"
+fi
+# The flag older notes and older READMEs use. It selects what is now the
+# default, so it must keep working and must not error.
+if bash "$theme/install-curve.sh" --uninstall >/dev/null 2>&1 &&
+   bash "$theme/install-curve.sh" --tubes >/dev/null 2>&1; then
+  ok "…and --tubes is still accepted, now as a no-op alias for the default"
+else
+  no "--tubes stopped working, which breaks every note that predates the flip"
 fi
 
 echo "— the README's install instructions, against what just happened"
