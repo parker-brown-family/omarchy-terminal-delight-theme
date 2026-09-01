@@ -48,21 +48,29 @@ END='-- <<< terminal-delight curve <<<'
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# --tubes selects the OTHER tier. Both bow a window; only one of them can be
-# click-correct, so this is a choice and not a level.
+# Two tiers. Both bow a window; only one of them can be click-correct, so this
+# is a choice and not a level — and it now defaults to the correct one.
 #
-#   default   the per-window warp — shaders/surface.frag, drawn in
-#             renderWorkspace(), before the cursor is composited. The picture
-#             moves and the pointer does not: ~1.7% of a window's width at the
-#             rim, ~4.25% at the corner. Cheap, needs nothing running.
-#   --tubes   the monitor pass — crt-glass.frag warps one rect per tile AFTER
-#             the cursor is in the buffer, so cursor and content are displaced
-#             together and a click lands where you aimed. Costs a watcher.
+#   default        the MONITOR pass — crt-glass.frag warps one rect per tile
+#                  AFTER the cursor is in the buffer, so cursor and content are
+#                  displaced together and a click lands where you aimed. Costs a
+#                  watcher (systemd + socat).
+#   --per-window   the older tier — shaders/surface.frag, drawn in
+#                  renderWorkspace(), BEFORE the cursor is composited. The
+#                  picture moves and the pointer does not: ~1.7% of a window
+#                  width at the rim, ~4.25% at the corner. Cheap, needs nothing
+#                  running, and permanently off by that much.
 #
-# Running BOTH is the one combination that is worse than either: content is
-# warped twice, the cursor once, and the miss comes back. So --tubes moves the
+# The default flipped because "cheap, needs nothing running" was buying a miss
+# that cannot be tuned out — it is which render pass you are in, not a number.
+# Someone installing this theme should get the stylized screen AND land their
+# clicks; the older tier stays reachable for a box with no systemd or no socat.
+# --tubes is still accepted and now does nothing, so older notes keep working.
+#
+# Running BOTH is the one combination worse than either: content warped twice,
+# the cursor once, and the miss comes back. So the monitor pass moves the
 # per-window shaders aside rather than leaving that to a reader's discipline.
-TUBES=""
+TUBES=1
 # Set when --tubes actually moved a per-window shader out of the way. That means
 # one is STILL COMPILED INTO THIS SESSION (a window shader is loaded at login and
 # survives both rm and `hyprctl reload`), so the watcher must not be started
@@ -73,9 +81,9 @@ UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT="td-tubes.service"
 
 # `case` rather than a loop ending in a bare `&&`: under `set -e` that shape is
-# one edit away from aborting the script on any argument that is not --tubes,
+# one edit away from aborting the script on any argument it does not know,
 # which would make --uninstall a silent no-op.
-case " $* " in *" --tubes "*) TUBES=1 ;; esac
+case " $* " in *" --per-window "*) TUBES="" ;; esac
 
 # The unit is shipped with a placeholder because this repo never puts its
 # binaries on PATH — baking the checkout's own path in is what makes the
@@ -309,3 +317,44 @@ if [[ -n $TUBES ]]; then
   echo "Check it any time with: td-tubes   (it reports the watcher and the preconditions)"
 fi
 echo "Undo with: ./install-curve.sh --uninstall"
+
+# Say it at the end, where it is read, and say it plainly. The warp is the good
+# part of this theme and it is also the unfinished part; a user who knows that
+# reads a glitch as a known limit rather than as their machine being broken.
+echo
+echo "  ── The warp is IN DEVELOPMENT ─────────────────────────────────────────────"
+echo "  It is a lovely thing to look at and it is not finished. Known, and visible:"
+echo
+# Tier-specific, because the two tiers are unfinished in different ways and a
+# warning that lists the other one is just noise that trains people to skip it.
+if [[ -n $TUBES ]]; then
+  cat <<'DEV'
+    * An overlay — a menu, a notification, a picker — is drawn under the old
+      tube layout for a fraction of a second before the shader is rebuilt, so
+      it can tear or flash on the way in and then snap clean.
+    * While one of those overlays is up, the desktop behind it stops bowing.
+      That is deliberate: it is the only way the overlay itself comes out
+      whole and undistorted.
+    * Two surfaces that overlap can show the covered strip twice.
+
+  Some of this may not be fixable here. The warp is a single gather over the
+  finished frame, so it only ever sees pixels that are already composited —
+  it cannot pull apart an overlay from the desktop blended into it.
+DEV
+else
+  cat <<'DEV'
+    * Your clicks will not land where you see them. This tier is drawn before
+      the cursor is composited, so the picture moves and the pointer does not:
+      about 1.7% of a window width at the rim, 4.25% at a corner. It is not a
+      tuning problem — it is which render pass the warp runs in — and the
+      default tier (a plain ./install-curve.sh) does not have it.
+    * Nothing else here re-bakes, so overlays are stable; you are trading a
+      permanent aim error for that.
+DEV
+fi
+cat <<'DEV'
+
+  Reports and pictures are welcome:
+  https://github.com/parker-brown-family/omarchy-terminal-delight-theme/issues
+  ───────────────────────────────────────────────────────────────────────────
+DEV
