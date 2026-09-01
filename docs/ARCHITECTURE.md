@@ -165,12 +165,103 @@ focus all live — and are tested — in exactly one place.
   list of exceptions, which is why it does not grow. Today it is exactly one
   thing: a session lock. `watch` also listens for `openlayer`/`closelayer` (both
   real events — verified as `openlayer>>omarchy-menu`).
-- **A translucent full-output layer is the one shape this cannot serve.**
-  `omarchy-menu` covers the screen and the desktop shows through it. The menu and
-  the desktop behind it occupy the same pixels and want different maps, which a
-  single-pass gather cannot give them. The tiles keep their maps and the menu is
-  warped along with them — the right trade, since the desktop is the dominant
-  content, but it is a limit rather than a solved case.
+- **CLAIMING IS ONLY HALF THE RULE: tubes must also be DISJOINT.** Ordering
+  decides who *owns* a pixel. It says nothing about where a map *reaches* — and a
+  gather maps a whole rect into whatever of that rect is still visible. So two
+  overlapping rects draw the covered band **twice**: once at 1:1 by the tube on
+  top, and once again, squeezed, by the tube underneath pulling it back into
+  view. Measured on the shape that produced it — a full-screen window
+  `(0,0,2560,1600)` at curvature 1 with the bar claiming `(0,0,2560,41.6)` flat
+  over its top:
+
+  | screen rows | owning tube | samples source rows |
+  |---|---|---|
+  | 0 – 41.6 | bar, flat | 0 – 41.6 (1:1) |
+  | 41 – 65 | window, bowed | 14.8 – 41.3 (**again**) |
+
+  which is a window toolbar drawn twice, a few pixels apart. It arrived the day
+  the bar started claiming: before that the window tube owned every row and its
+  map was monotonic across the whole screen, so each source row appeared once.
+  **A tube therefore claims what remains VISIBLE of it, not its full geometry.**
+  Full generality is not available — subtracting a rect from the middle of a rect
+  is not a rect — but the case that matters is edge chrome, which spans a full
+  edge, so the subtraction stays a rect. A covering layer clips nothing and must
+  not: it owns every pixel already, so no map beneath it is ever evaluated.
+  **Residual, and it predates all of this:** two overlapping *windows* duplicate
+  the same way — a floating window over a tiled one is pulled into the tile
+  beneath by the tile's own map. It is least visible near the centre, where the
+  barrel is near-identity, and worst at the rim. Not clippable as a rect.
+- **The enumeration is the invariant. Widening a filter is not.** The tear came
+  back four times, and the first three fixes are why the fourth was misread. The
+  screensaver, the scratchpad and the calculator were each a CLIENT dropped by a
+  filter, so each was fixed by widening that filter — and after three wins in a
+  row the shape looked like "find the next dropped window". It was not. Hyprland
+  draws two kinds of surface, and `tubes_json` enumerated one: `hyprctl layers`
+  was read for exactly one purpose, deciding whether a lock was up, so no layer
+  could ever be a claimant. The bar, the menu, every notification and every
+  picker sat permanently in the failure the invariant forbids, and no widening of
+  the client filter could reach them, because they were never in the loop being
+  widened. **When this class recurs, ask what is DRAWN that this program does not
+  ENUMERATE — not which filter dropped it.** Layers claim their own rects now, on
+  the same terms as clients, and `test/run` checks each fixture layer by name so
+  a whole missing source cannot pass as green again.
+- **A SIZED layer claims flat. A COVERING layer is a policy call, not a
+  partition.** A tube is a screen; a layer is drawn ON the glass, so a sized one
+  — a bar, a dock, a panel — takes curvature 0: immune to its neighbours,
+  undistorted itself. Barrelling a 26 px strip inside its own rect shears the
+  text and the bezel eats its edge. That half is ordinary and it is what fixed
+  the bar, which had been wearing a fullscreen window's map whenever one reached
+  under it.
+  **The covering half is not ordinary, and the obvious rule is wrong twice
+  over.** Every Quickshell overlay Omarchy ships — `omarchy-menu`,
+  `omarchy-notifications`, `hyprpicker`, `selection` — is a **full-output HOST
+  surface**. Measured 2026-09-01: `omarchy-notifications` reports 1600x1000 on
+  eDP-1 while drawing three toasts in a corner. The rect is the whole monitor
+  whatever the host happens to be drawing, so **the surface rect tells you
+  nothing about where the content is** — and the content is composited into the
+  buffer BEFORE the screen shader runs, so toast pixels and desktop pixels
+  arrive already blended. No single-pass gather can unwarp one and not the
+  other. Same shape as the cursor problem, and not tunable either.
+  **So a covering layer claims the whole output, FLAT.** Three rules were tried
+  against real screens, in this order, and the two obvious ones are both wrong:
+  1. **Claim nothing.** The desktop is untouched and the overlay is drawn through
+     whatever tiles lie under it. It tears at their seams — and worse than
+     "tears": a tile's bezel blacks whatever is drawn over its rim, so an
+     overlay crossing a window's edge is CUT, not bent. Photographed twice: a
+     menu with a bezel band through the middle of the card, and a toast sheared
+     off mid-line where it crossed a window tube's top edge.
+  2. **Claim it bowed.** Keeps the desktop bowed under a translucent card, which
+     is why it looked right for the menu. It is not: a full-output tube claims
+     ABOVE every tile it covers, so it also takes the pixels of a window that
+     opted out at curvature 0 — `terminal-delight`, which warps its own panes —
+     and warps it a second time. On a monitor filled by one such window that is
+     every pixel on the screen. **The curvature-0 opt-out cannot survive
+     anything claiming over the top of it bowed**, which is a general fact about
+     the opt-out, not a fact about menus. It also made the desktop reshape twice
+     per notification; the journal caught the count swinging `5 → 11 → 9 → 7 → 5`
+     as overlays mapped and unmapped.
+  3. **Claim it flat.** An identity map draws no bezel and distorts nothing, so
+     the overlay renders whole and sharp, and nothing that opted out can be
+     warped twice — identity composes with anything. The cost is that the
+     desktop unbows for as long as an overlay is up. That is the only one of the
+     three that is a change of DEGREE rather than a broken picture, and on a
+     monitor whose windows are already curvature 0 it is not visible at all.
+  So there is no namespace table and no list to grow: every layer is flat, sized
+  or covering. The one namespace rule left is the lock, and it is not about
+  curvature — a lock covers the screen with something we cannot ENUMERATE, so
+  the partition is unknowable and the monitor gets no tubes rather than a flat
+  one.
+  Residual, worth knowing before chasing it: the re-bake is event-driven, so an
+  overlay is drawn under the old tubes for the frame or two between `openlayer`
+  and the recompile. That is inherent to a baked shader, not a rule that can be
+  fixed here.
+- **A slice is a dropped surface you wrote yourself.** `cap()` used to trim the
+  list to `MAX_TUBES` with `.[0:24]`. The surfaces past the cut are still drawn —
+  they just lose their rects and get warped through whichever neighbour survived,
+  which is this bug arriving from inside the fix for it. There is no partially
+  partitioned monitor: the budget is spent a monitor at a time and one that does
+  not fit goes flat, the same answer already given for a surface that cannot be
+  placed.
 - **Omarchy's lock is not a layer, and nothing announces it.** There is no
   `hyprlock` on the box: `omarchy-system-lock` calls `omarchy-shell lock`, whose
   lock is a Quickshell **ext-session-lock** surface. That protocol is neither a

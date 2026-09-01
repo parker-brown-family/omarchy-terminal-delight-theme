@@ -529,20 +529,51 @@ tubes="$(tubes_json)"
 # THE INVARIANT, stated as a test: every VISIBLE surface claims its own rect.
 # tube_at picks by output pixel, so a surface that is drawn but absent from this
 # list is drawn through whatever rect lies beneath it — and that is the tear.
-# Every "new overlay bug" this project has had was one filter dropping one
-# visible surface: the screensaver (fullscreen), the scratchpad (special
-# workspace), the calculator (over an un-tubed neighbour). The list drops none
-# of them now, so the invariant is the regression test for all of them at once.
+# Every "new overlay bug" this project has had was one visible surface missing
+# from this list: the screensaver (fullscreen), the scratchpad (special
+# workspace), the calculator (over an un-tubed neighbour), the keybindings menu
+# (a layer, never enumerated at all).
 #
-# Fixture: 5 visible (chrome, foot, terminal-delight, screensaver, foot-on-mon2)
-# and 3 correctly absent — an unmapped window, one on a workspace no monitor is
-# showing, and one on a special workspace that is not raised.
+# The first three were CLIENTS dropped by a filter, and fixing three filters in
+# a row is what made the fourth look like a fourth one-off. It was not. A client
+# is one of the two kinds of surface Hyprland draws, and this test asserted the
+# invariant over one of them — counting five clients and calling the partition
+# total while the bar, the menu and every notification had no rect at all. So
+# the count below covers both sources, and the mechanical check further down is
+# the one that keeps a whole missing CLASS from passing as green again.
+#
+# Fixture: 5 visible clients (chrome, foot, terminal-delight, screensaver,
+# foot-on-mon2) and 3 correctly absent — an unmapped window, one on a workspace
+# no monitor is showing, and one on a special workspace that is not raised —
+# plus 2 layers on eDP-1 (omarchy-bar at level 2, omarchy-menu at level 3).
 assert_eq "every visible surface claims a rect — none is left to be drawn through another" \
-  "$(jq 'length' <<<"$tubes")" "5"
+  "$(jq 'length' <<<"$tubes")" "7"
+
+# The check that survives the next surface class nobody has thought of yet. It
+# does not restate the visibility rules — restating them would just mirror any
+# bug in them — it reads the fixture and demands that each layer Hyprland draws
+# over the tiles is answerable by name in the baked list. It governs the layers
+# we can PLACE, which is both of this fixture's: a sized bar, and a covering
+# menu the policy table names. The one case it cannot speak for — a covering
+# host we cannot locate, which claims nothing on purpose — is asserted by name
+# further down, against the locked fixture.
+missing=""
+while read -r ns; do
+  [[ -z "$ns" ]] && continue
+  [[ "$(jq --arg n "$ns" '[.[] | select(.class == $n)] | length' <<<"$tubes")" == "0" ]] &&
+    missing="$missing $ns"
+done < <(jq -r '.[] | (.levels["2"][]?, .levels["3"][]?) | .namespace' "$here/fixtures/tubes/layers.json")
+assert_eq "…and that holds for layers by name, not just by count" "$missing" ""
 assert_eq "…and the invisible ones stay out (unmapped, off-workspace, unraised special)" \
   "$(jq '[.[] | select(.class=="foot")] | length' <<<"$tubes")" "2"
-assert_eq "most-recently-focused first — the shader takes the first hit" \
-  "$(jq -r '.[0].class' <<<"$tubes")" "google-chrome"
+# Order only means anything WITHIN a monitor, and there it means everything:
+# tube_at takes the first hit. Layers draw above windows, so they claim first —
+# level 3 over level 2 — and the clients follow most-recently-focused first.
+assert_eq "within a monitor: topmost layer first, then clients by focus" \
+  "$(jq -r '[.[] | select(.mon==0) | .class] | join(",")' <<<"$tubes")" \
+  "omarchy-menu,omarchy-bar,foot,terminal-delight"
+assert_eq "…and the shader takes the first hit on the rotated monitor too" \
+  "$(jq -r '[.[] | select(.mon==1) | .class] | join(",")' <<<"$tubes")" "google-chrome"
 assert_eq "unrotated monitor: origin-shifted and scaled, nothing else" \
   "$(jq -c '.[] | select(.class=="foot" and .mon==0) | [.x,.y,.w,.h]' <<<"$tubes")" "[26,134,1478,2000]"
 # transform 3 against a 1920x1080 mode is (x,y) -> (1920-y, x), both corners,
@@ -559,15 +590,72 @@ assert_eq "terminal-delight is in the list, so nothing else can claim its pixels
   "$(jq '[.[] | select(.class=="terminal-delight")] | length' <<<"$tubes")" "1"
 assert_eq "…and opts out by curvature 0, not by absence" \
   "$(jq -r '.[] | select(.class=="terminal-delight") | .curv' <<<"$tubes")" "0"
-assert_eq "…while everything else bows" \
-  "$(jq '[.[] | select(.curv != 1)] | length' <<<"$tubes")" "1"
+# Curvature 0 is not just terminal-delight any more: every layer takes it, and
+# for a reason worth keeping. A covering layer claims ABOVE the tiles, so if it
+# claimed BOWED it would take the pixels of a window that opted out at 0 and warp
+# it a second time — on a monitor filled by one terminal-delight window that is
+# the whole screen. Identity is the only map that composes with an opt-out.
+assert_eq "…and so does every layer, which is what makes the opt-out survive" \
+  "$(jq '[.[] | select(.curv != 1)] | length' <<<"$tubes")" "3"
+assert_eq "…no layer is ever bowed, sized or covering" \
+  "$(jq '[.[] | select(.class | startswith("omarchy-")) | select(.curv != 0)] | length' <<<"$tubes")" "0"
 
-# A size-only layer rule flattened the whole desktop on every menu press:
-# omarchy-menu is a full-output level-3 layer and it is TRANSLUCENT, so the
-# desktop shows through and is supposed to stay bowed. The fixture carries the
-# menu so that cannot come back.
-assert_eq "a full-output but translucent layer (the menu) does NOT drop tubes" \
-  "$(jq '[.[] | select(.mon == 0)] | length' <<<"$tubes")" "2"
+# CLAIMING IS ONLY HALF THE RULE, and the other half took a photograph to find.
+# Ordering decides who OWNS a pixel; it says nothing about where a map REACHES.
+# A gather maps a whole rect into whatever of that rect is still visible, so two
+# overlapping rects draw the covered band TWICE: once at 1:1 by the tube on top,
+# and once again, squeezed, by the tube underneath pulling it back into view.
+#
+# Arithmetic from the shape that produced it — a full-screen window
+# (0,0,2560,1600) at curvature 1 with the bar claiming (0,0,2560,41.6) flat over
+# its top. Screen rows 0..41.6 show source 0..41.6 at 1:1; screen rows 41..65
+# show source 14.8..41.3 a second time. That is a window toolbar drawn twice, a
+# few pixels apart, and it arrived the day the bar started claiming — before
+# that the window tube owned every row and its map was monotonic, so each source
+# row appeared exactly once.
+#
+# So a tube claims what remains VISIBLE of itself. terminal-delight is the
+# fixture's window under the bar: (0,0,1920,1080) in buffer space, clipped to
+# start below the 52 px bar strip. Curvature is irrelevant to the clip — the
+# geometry is what duplicates — which is why this asserts the rect, not the bow.
+assert_eq "a tube is clipped to what remains visible of it, not to its full rect" \
+  "$(jq -c '.[] | select(.class=="terminal-delight") | [.x,.y,.w,.h]' <<<"$tubes")" \
+  "[0,52,1920,1028]"
+# And the window that never reached under the bar keeps every pixel it had, so
+# the clip is a subtraction and not a blanket inset.
+assert_eq "…while one that never reached under it is untouched" \
+  "$(jq -c '.[] | select(.class=="foot" and .mon==0) | [.x,.y,.w,.h]' <<<"$tubes")" \
+  "[26,134,1478,2000]"
+# A COVERING layer must clip nothing. It already owns every pixel on the
+# monitor, so no map beneath it is ever evaluated — and clipping to it would
+# delete every tube on that monitor, which is the lock behaviour, not this one.
+assert_eq "…and a covering layer clips nothing, because nothing beneath it is reached" \
+  "$(jq '[.[] | select(.mon == 0)] | length' <<<"$tubes")" "4"
+
+# The menu — where this class was finally seen. omarchy-menu is a full-output
+# level-3 layer and it is TRANSLUCENT, so the desktop shows through it and is
+# supposed to stay bowed. A size-only rule that dropped tubes for it flattened
+# the entire desktop on every menu press, which is why the rule was narrowed to
+# lock namespaces. What the narrowing left behind was a menu with no rect of its
+# own: the card is drawn across whatever tiles lie under it and torn at their
+# seams, a bezel band straight through the middle of the dialog. Photographed
+# 2026-09-01, which is what sent us looking for the class instead of the case.
+#
+# It claims the output now: one continuous map edge to edge, so the card is
+# whole AND the desktop behind it still bows. Neither earlier rule could hold
+# both of those at once.
+assert_eq "a full-output translucent layer still does NOT drop tubes" \
+  "$(jq '[.[] | select(.mon == 0)] | length' <<<"$tubes")" "4"
+assert_eq "…and claims the whole output instead of being torn across the tiles" \
+  "$(jq -c '.[] | select(.class=="omarchy-menu") | [.x,.y,.w,.h,.curv]' <<<"$tubes")" \
+  "[0,0,3840,2160,0]"
+# A bar is not a screen; it is drawn ON the glass. It claims a rect so no window
+# can warp it — a fullscreen window reaches under the bar and was bowing the
+# strip through its own map — but it claims FLAT, because barrelling a 26 px
+# band inside its own rect shears the text and the bezel eats its edge.
+assert_eq "edge chrome claims its strip, and claims it flat" \
+  "$(jq -c '.[] | select(.class=="omarchy-bar") | [.x,.y,.w,.h,.curv]' <<<"$tubes")" \
+  "[0,0,3840,52,0]"
 
 # The screensaver is a FULLSCREEN window. It used to be excluded "because it has
 # no frame to be a tube for" — and being excluded is precisely what tore it: it
@@ -596,8 +684,32 @@ export TD_TEST_FIXTURES="$here/fixtures/tubes-locked"
 locked="$(tubes_json)"
 assert_eq "a layer covering the output drops that monitor's tubes" \
   "$(jq '[.[] | select(.mon == 0)] | length' <<<"$locked")" "0"
-assert_eq "…and a small overlay (a notification) does not" \
-  "$(jq '[.[] | select(.mon == 1)] | length' <<<"$locked")" "1"
+# A small overlay still does not drop the monitor — and it no longer floats
+# there rectless either. A notification straddling a tile seam was torn by the
+# two maps beneath it for exactly as long as layers were not claimants.
+assert_eq "…and a small overlay (a notification) does not drop the monitor" \
+  "$(jq '[.[] | select(.mon == 1)] | length' <<<"$locked")" "2"
+assert_eq "…it claims its own rect, rotated into buffer space, and flat" \
+  "$(jq -c '.[] | select(.class=="omarchy-notification") | [.x,.y,.w,.h,.curv]' <<<"$locked")" \
+  "[1780,700,120,360,0]"
+assert_eq "…while the locked monitor keeps none, layers included" \
+  "$(jq '[.[] | select(.mon == 0)] | length' <<<"$locked")" "0"
+
+# A covering HOST layer: omarchy-notifications is a FULL-OUTPUT surface whether
+# it is drawing three toasts in a corner or nothing at all, so its rect says
+# nothing about where its content is. Leaving it unclaimed was tried and
+# photographed: the toast is drawn through the tiles beneath it, and a tile
+# bezel blacks whatever is drawn over its rim, so a toast crossing a window's
+# top edge comes out cut in half rather than merely bent. It claims the output
+# flat instead — identity, no bezel, nothing distorted, and nothing that opted
+# out at curvature 0 warped a second time.
+assert_eq "a covering host layer claims the whole output" \
+  "$(jq '[.[] | select(.mon == 2)] | length' <<<"$locked")" "3"
+assert_eq "…flat, edge to edge, so the overlay it hosts is drawn through one identity" \
+  "$(jq -c '.[] | select(.class=="omarchy-notifications") | [.x,.y,.w,.h,.curv]' <<<"$locked")" \
+  "[0,0,1600,900,0]"
+assert_eq "…and it claims FIRST, so the tiles beneath are unreachable while it is up" \
+  "$(jq -r '[.[] | select(.mon == 2) | .class] | .[0]' <<<"$locked")" "omarchy-notifications"
 
 # The one that actually bit. Omarchy does not use hyprlock — it locks through
 # omarchy-shell, and a Quickshell ext-session-lock is neither a client nor a
@@ -613,14 +725,14 @@ assert_eq "…and leaves an unlocked monitor alone" \
 export TD_TEST_FIXTURES="$here/fixtures/tubes"
 
 block="$(emit_block "$tubes")"
-assert_has "the baked block declares its count" "$block" "#define TUBE_COUNT 5"
+assert_has "the baked block declares its count" "$block" "#define TUBE_COUNT 7"
 assert_has "rects are floats, not bare ints one driver would reject" "$block" \
   "vec4(955.0, 13.0, 926.0, 1054.0)"
-assert_has "each rect carries the monitor it belongs to" "$block" "1, 0, 0, 2, 2"
+assert_has "each rect carries the monitor it belongs to" "$block" "0, 0, 1, 0, 0, 2, 2"
 # Curvature rides alongside the rect so a surface can claim its pixels without
 # bowing. Floats for the same reason as the rects: a driver that widens ints
 # here is not one to rely on.
-assert_has "each rect carries its curvature, as floats" "$block" "1.0, 1.0, 0.0, 1.0, 1.0"
+assert_has "each rect carries its curvature, as floats" "$block" "0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0"
 assert_has "…declared as a float array" "$block" \
   "const float TUBE_CURV[TUBE_COUNT] = float[TUBE_COUNT]("
 assert_eq "an empty layout emits no array — GLSL forbids a zero-length one" \

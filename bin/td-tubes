@@ -219,16 +219,33 @@ tubes_json() {
                          t: .transform, ws: .activeWorkspace.id,
                          special: (.specialWorkspace.id // 0) } })
         | from_entries) as $mon
+    # `hyprctl layers` is keyed by monitor NAME while everything else here works
+    # in ids, so the layer arm needs the same monitor facts under the other key.
+    | ($m | map({ key: .name,
+                  value: { id: .id, x: .x, y: .y, scale: .scale,
+                           w: .width, h: .height, t: .transform } })
+        | from_entries) as $by_name
     # THE INVARIANT: every visible surface claims its own rect, so nothing is
     # ever warped by a rect that is not its own.
     #
     # tube_at picks a tube by OUTPUT PIXEL. A surface that is DRAWN but has no
     # tube of its own therefore gets whatever rect happens to lie beneath it —
     # and that is the tear, every time. The screensaver, the scratchpad, the
-    # calculator: not new bugs, the same bug, arriving through whichever filter
-    # dropped a visible surface from this list. So the list no longer drops any:
-    # fullscreen windows are in, special-workspace windows are in, and a window
-    # that must not bow gets curvature 0 rather than being omitted.
+    # calculator, the keybindings menu: not new bugs, the same bug, arriving
+    # through whichever surface this list failed to enumerate.
+    #
+    # Be exact about how that kept happening, because the shape repeats. The
+    # first sightings were all CLIENTS dropped by a filter, so each was fixed by
+    # widening the filter, and the filter now drops nothing: fullscreen windows
+    # are in, special-workspace windows are in, and a window that must not bow
+    # gets curvature 0 rather than being omitted. That run of successes is what
+    # hid the real hole. The invariant says every visible SURFACE — and a client
+    # is only one of the two kinds Hyprland draws. LAYERS (the bar, the menu,
+    # notifications, pickers) were never claimants at all: this program read
+    # `hyprctl layers` for exactly one purpose, deciding whether a lock was up.
+    # So the entire layer class sat permanently in the failure the invariant
+    # exists to forbid, and no amount of widening the client filter could ever
+    # reach it. They are enumerated below on the same terms as clients.
     #
     # What remains below is the one honest case: a surface we cannot enumerate
     # or place. There is no rect to give it, so the partition is unknowable and
@@ -263,7 +280,84 @@ tubes_json() {
         # /usr/share/omarchy/bin/omarchy-hyprland-session-locked. Detected in the
         # first arm above, which is where the "we cannot place it" cases live.
         | unique ) as $covered
-    | [ $c[]
+    # LAYERS, on the same terms as clients: a rect of their own, so no other map
+    # can reach them. (No apostrophes in here either — see the note further down;
+    # one ends this single-quoted jq program and the failure reads as a bash
+    # syntax error 40 lines away.) Levels 2 and 3 only: level 0 is the wallpaper
+    # and level 1 sits UNDER the windows, so neither is ever drawn over a tile.
+    #
+    # Flat. A tube is a screen; a layer is drawn ON the glass — a bar, a dock, a
+    # sized panel. Bowing a 26 px strip inside its own rect shears it and the
+    # bezel eats its edge, so curvature 0 is what a layer wants: immune to its
+    # neighbours, undistorted itself.
+    #
+    # A COVERING layer is a different animal and needs saying carefully, because
+    # the obvious rule is wrong twice over. Every Quickshell overlay Omarchy
+    # ships — the menu, the notifications, the pickers — is a full-output HOST
+    # surface. Its rect is the whole monitor whatever it happens to be drawing,
+    # so the rect tells us nothing about where the content is, and the content is
+    # composited into the buffer BEFORE this shader runs. Toast pixels and
+    # desktop pixels arrive already blended. No single-pass gather can unwarp one
+    # and not the other; this is the same shape as the cursor problem, and it is
+    # not tunable either.
+    #
+    # It claims the whole output, FLAT. Three candidate rules were tried against
+    # real screens before this one, and the two obvious ones are both wrong:
+    #
+    #   claim nothing        The desktop is untouched and the overlay is drawn
+    #                        through whatever tiles lie under it, so it tears at
+    #                        their seams — and a tile bezel blacks whatever is
+    #                        drawn over its rim, which is the hard cut through a
+    #                        toast rather than a mere bend. Photographed twice.
+    #   claim it BOWED       Keeps the desktop bowed under a translucent card,
+    #                        which is why it looked right for the menu. But a
+    #                        full-output tube sits ABOVE every tile it covers,
+    #                        so it also takes the pixels of a window that opted
+    #                        out at curvature 0 — terminal-delight, which warps
+    #                        its own panes — and warps it a second time. On a
+    #                        monitor filled by one such window that is every
+    #                        pixel on the screen. The curvature-0 opt-out cannot
+    #                        survive anything claiming over the top of it bowed.
+    #   claim it FLAT        An identity map draws no bezel and distorts nothing,
+    #                        so the overlay renders whole and sharp, and no
+    #                        opted-out window can be warped twice — identity
+    #                        composes with anything. The desktop unbows for as
+    #                        long as the overlay is up, which is the honest cost
+    #                        and the only one of the three that is a change of
+    #                        DEGREE rather than a broken picture.
+    #
+    # So there is no namespace table here, and no list to grow: every layer is
+    # flat, sized or covering. The one namespace rule left is the lock, in the
+    # arm above, and it is not about curvature at all — a lock covers the screen
+    # with something we cannot enumerate, so the partition is unknowable and the
+    # monitor gets no tubes rather than a flat one.
+    | [ $l | to_entries[]
+        | ($by_name[.key]) as $mo
+        | select($mo != null)
+        | select(($covered | index($mo.id)) == null)
+        | (.value.levels // {}) | to_entries[]
+        | (.key | tonumber) as $lvl
+        | select($lvl == 2 or $lvl == 3)
+        | .value[]
+        | select(.w > 0 and .h > 0)
+        | . as $ly
+        | (($ly.x - $mo.x) * $mo.scale) as $x0
+        | (($ly.y - $mo.y) * $mo.scale) as $y0
+        | ($x0 + $ly.w * $mo.scale)     as $x1
+        | ($y0 + $ly.h * $mo.scale)     as $y1
+        | ([$x0, $y0] | xf($mo.t; $mo.w; $mo.h)) as $a
+        | ([$x1, $y1] | xf($mo.t; $mo.w; $mo.h)) as $b
+        | { mon:   $mo.id,
+            class: ($ly.namespace // "layer"),
+            x: ([$a[0], $b[0]] | min),
+            y: ([$a[1], $b[1]] | min),
+            w: (($b[0] - $a[0]) | length),
+            h: (($b[1] - $a[1]) | length),
+            # Flat, always. See the note above: bowed would warp an opted-out
+            # window twice, and identity is the only map that composes.
+            curv:  0,
+            lvl:   $lvl } ] as $layer_tubes
+    | ( [ $c[]
         | select(.mapped and (.hidden | not))
         | select((.monitor) as $mn | ($covered | index($mn)) == null)
         | ($mon[.monitor | tostring]) as $mo
@@ -297,7 +391,64 @@ tubes_json() {
             # here: this jq program is single-quoted and one would end it.)
             curv:  (if .class == "terminal-delight" then 0 else 1 end),
             fh: .focusHistoryID } ]
-    | sort_by(.fh)
+        | sort_by(.fh) ) as $client_tubes
+    # Layers draw above windows, so they claim first — level 3 over level 2,
+    # then clients most-recently-focused first. tube_at takes the first hit, and
+    # the order only ever means anything within one monitor.
+    | ($layer_tubes | sort_by(-.lvl) | map(del(.lvl))) as $lt
+    # CLAIMING WAS ONLY HALF THE RULE. Ordering decides who OWNS a pixel; it does
+    # nothing about where the MAP of a tube reaches. A gather maps its whole rect
+    # into whatever of itself is still visible, so when two rects overlap, the
+    # covered band is drawn TWICE — once at 1:1 by the tube on top, and once
+    # again, squeezed, by the tube underneath pulling it back into view.
+    #
+    # Measured on the shape that produced it: a full-screen window (0,0,2560,1600)
+    # at curvature 1 with the bar claiming (0,0,2560,41.6) flat over its top.
+    # Screen rows 0..41.6 show source rows 0..41.6 at 1:1; screen rows 41..65 show
+    # source rows 14.8..41.3 again, compressed. That is a toolbar drawn twice, a
+    # few pixels apart, and it is what the bar claim bought before this clip.
+    # Before the bar claimed anything the window tube owned every row and its map
+    # was monotonic over the whole screen, so each source row appeared once.
+    #
+    # So a tube claims what remains VISIBLE of itself. Full generality is not
+    # available — subtracting a rect from the middle of a rect is not a rect —
+    # but the case that matters is: edge chrome, which spans a full edge, so the
+    # subtraction stays a rect. A covering layer clips nothing (it fails both
+    # partial tests below) and needs to: it owns every pixel already, so no map
+    # beneath it is ever evaluated.
+    | ( $client_tubes
+        | map( . as $c0
+               | reduce ($lt[] | select(.mon == $c0.mon)) as $l ($c0;
+                   . as $c
+                   # Spans it horizontally: can only be eating the top or bottom.
+                   | if ($l.x <= $c.x and ($l.x + $l.w) >= ($c.x + $c.w))
+                     then if ($l.y <= $c.y
+                              and ($l.y + $l.h) > $c.y
+                              and ($l.y + $l.h) < ($c.y + $c.h))
+                          then .h = ($c.h - (($l.y + $l.h) - $c.y))
+                             | .y = ($l.y + $l.h)
+                          elif (($l.y + $l.h) >= ($c.y + $c.h)
+                                and $l.y > $c.y
+                                and $l.y < ($c.y + $c.h))
+                          then .h = ($l.y - $c.y)
+                          else . end
+                     else . end
+                   | . as $c
+                   # Spans it vertically: the left or right edge, same shape.
+                   | if ($l.y <= $c.y and ($l.y + $l.h) >= ($c.y + $c.h))
+                     then if ($l.x <= $c.x
+                              and ($l.x + $l.w) > $c.x
+                              and ($l.x + $l.w) < ($c.x + $c.w))
+                          then .w = ($c.w - (($l.x + $l.w) - $c.x))
+                             | .x = ($l.x + $l.w)
+                          elif (($l.x + $l.w) >= ($c.x + $c.w)
+                                and $l.x > $c.x
+                                and $l.x < ($c.x + $c.w))
+                          then .w = ($l.x - $c.x)
+                          else . end
+                     else . end ) )
+        | map(select(.w > 0 and .h > 0)) ) as $clipped
+    | $lt + $clipped
   '
 }
 
@@ -379,17 +530,28 @@ describe() {
   jq -r '.[] | "  mon \(.mon)  \(.x)x\(.y) +\(.w)x\(.h)  \(.class)"' <<<"$json"
 }
 
-# Trim to MAX_TUBES, loudly.
+# Trim to MAX_TUBES, loudly — and by WHOLE MONITORS.
+#
+# Slicing the list at 24 was the same bug as any other dropped surface, only
+# written by us: the surfaces past the cut are still DRAWN, they just lose their
+# rects and get warped through whichever neighbour survived the cut. There is no
+# such thing as a partially partitioned monitor. So the budget is spent a monitor
+# at a time and one that does not fit goes flat rather than torn — the same
+# answer this program already gives for a surface it cannot place.
 cap() {
-  local json="$1" n
+  local json="$1" n res
   n="$(jq 'length' <<<"$json")"
-  if [[ "$n" -gt "$MAX_TUBES" ]]; then
-    echo "td-tubes: $n windows, capping at $MAX_TUBES — DROPPED:" >&2
-    jq -r ".[$MAX_TUBES:] | .[] | \"  \(.class) on mon \(.mon)\"" <<<"$json" >&2
-    jq ".[0:$MAX_TUBES]" <<<"$json"
-  else
-    printf '%s' "$json"
-  fi
+  if [[ "$n" -le "$MAX_TUBES" ]]; then printf '%s' "$json"; return 0; fi
+  res="$(jq -c --argjson max "$MAX_TUBES" '
+    reduce (group_by(.mon)[]) as $g
+      ({ n: 0, keep: [], dropped: [] };
+       if (.n + ($g | length)) <= $max
+       then .n = .n + ($g | length) | .keep = .keep + $g
+       else .dropped = .dropped + $g
+       end)' <<<"$json")"
+  echo "td-tubes: $n surfaces, over the $MAX_TUBES-tube budget — these monitors go FLAT rather than torn:" >&2
+  jq -r '.dropped | group_by(.mon)[] | "  mon \(.[0].mon): \(length) surface(s)"' <<<"$res" >&2
+  jq '.keep' <<<"$res"
 }
 
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0 2>/dev/null || true; fi
