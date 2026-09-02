@@ -520,7 +520,7 @@ def main():
         shutil.copy2(repo_previews / f"{key}.png", theme / "preview.png")
 
         # the base background, pulled toward the variant's hue
-        run([MAGICK, REPO / "backgrounds/0-void-tube.jpg",
+        run([MAGICK, REPO / "backgrounds/13-void-tube.jpg",
              "-modulate", "100,92", "-fill", v["accent"], "-tint", "22",
              "-quality", "88", theme / "backgrounds" / f"0-{key}-tube.jpg"])
 

@@ -1,1 +1,5 @@
 __pycache__/
+
+# Background recon material — source images and sweep scratch, 30 MB, never
+# ships. What survives review is copied into backgrounds/ and committed there.
+background-ideas/

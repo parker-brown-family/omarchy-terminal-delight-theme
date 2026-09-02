@@ -527,7 +527,7 @@ validates every key it reads rather than trusting this repo to be careful.
 | File | What |
 |---|---|
 | `colors.toml` | the palette every Omarchy template is generated from |
-| `backgrounds/` | Void Tube |
+| `backgrounds/` | fourteen wallpapers the switcher cycles (`omarchy theme bg next`). Osaka Jade's *Shaded Entrance* is the default because sort order picks it; Void Tube is still here, and `build-variants` still tints it per variant. Thirteen are Omarchy's own theme art, carried over unmodified — `backgrounds/ATTRIBUTION.md` says which is whose |
 | `crt-glass.frag` | the MONITOR pass — Terminal Delight's display stack for the whole desktop: px-true scanlines, the rolling tracking band, stepped flicker, glass glare, phosphor bloom, vignette, and a brightness/contrast/saturation/gamma grade. Every dial is a `const` in its MONITOR CONFIG block; `CURV = 0` because the per-window warp carries the curve |
 | `shaders/surface.frag`, `shaders/ext.frag` | the per-window warp |
 | `install-curve.sh` | the opt-in installer for what the drop takes away: the per-window shaders, plus a managed rounding/blur/shadow/screen-shader block in `~/.config/hypr/looknfeel.lua`. It is also what arms the per-tile CRT switch, because that switch is the rounded-variant gate |
