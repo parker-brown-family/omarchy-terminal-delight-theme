@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# A layer nobody can see must not claim a rect.
+#
+#   test/probe-fullscreen-layer
+#
+# THE BUG. The invariant is that every VISIBLE surface claims its own rect, so
+# that nothing is ever warped by a rect that is not its own. A level-2 (TOP)
+# layer under a fullscreen window is not visible — Hyprland draws the window
+# over it — but it stays mapped, so `hyprctl layers` keeps listing it and it
+# kept getting a rect anyway.
+#
+# The bar then owned a strip of a window it was not drawing on. That strip
+# rendered flat, through the bar identity map, while the rest of the window
+# bowed through its own; and the clip that stops two tubes drawing the same
+# band twice carved the window tube to START below the strip. What you see is a
+# band of the application chrome lying flat across the top of a bowed
+# fullscreen window, with a bezel between the two. Photographed on DP-2, which
+# is rotated (transform 3), so the bar rect is a 26 px column at the right edge
+# of the framebuffer and the seam appears along the visual top.
+#
+# THE TEST. Geometric, not a fullscreen flag: a layer is covered when a visible
+# client on the same monitor FULLY CONTAINS its rect. That needs no monitor
+# size, no transform, and no opinion about which of Hyprland fullscreen enum
+# values mean what — a fullscreen window contains the bar rect and a tiled one
+# does not, which is the actual question being asked. It also catches a
+# full-output client that is not flagged fullscreen at all.
+#
+# Level 3 is OVERLAY and draws ABOVE a fullscreen window, so it must keep its
+# claim in both cases. That is the second assertion here and it is the one that
+# would break if somebody "simplified" the rule to drop every layer under a
+# fullscreen window.
+set -uo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PASS=0; FAIL=0
+ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; printf '       %s\n' "${2:-}"; }
+
+S="$(mktemp -d)"; trap 'rm -rf "$S"' EXIT
+mkdir -p "$S/bin"
+
+MON='[{"id":0,"name":"DP-2","x":1600,"y":0,"width":1920,"height":1080,"scale":1,"transform":3,"activeWorkspace":{"id":2},"specialWorkspace":{"id":0},"solitaryBlockedBy":[]}]'
+LAYERS='{"DP-2":{"levels":{"2":[{"namespace":"omarchy-bar","x":1600,"y":0,"w":1080,"h":26}],"3":[{"namespace":"omarchy-osd","x":1600,"y":900,"w":200,"h":60}]}}}'
+
+mk_hyprctl() {
+  cat >"$S/bin/hyprctl" <<STUB
+#!/usr/bin/env bash
+case "\$1" in
+  monitors) cat <<'J'
+$MON
+J
+  ;;
+  clients)  cat <<'J'
+$1
+J
+  ;;
+  layers)   cat <<'J'
+$LAYERS
+J
+  ;;
+esac
+exit 0
+STUB
+  chmod +x "$S/bin/hyprctl"
+}
+
+surfaces() {
+  PATH="$S/bin:$PATH" bash -c \
+    "source '$REPO/bin/td-tubes'; describe \"\$(cap \"\$(tubes_json)\")\"" 2>/dev/null
+}
+
+echo "a layer nobody can see must not claim"
+echo
+
+# --- tiled: the bar is visible, so it claims ------------------------------
+mk_hyprctl '[{"address":"0x1","class":"org.gnome.Nautilus","mapped":true,"hidden":false,"monitor":0,"workspace":{"id":2},"at":[1600,40],"size":[1080,900],"focusHistoryID":0}]'
+TILED="$(surfaces)"
+grep -q 'omarchy-bar' <<<"$TILED" \
+  && ok "a tiled window leaves the bar claiming its own strip" \
+  || bad "a tiled window leaves the bar claiming its own strip" "$TILED"
+
+# --- fullscreen: the bar is covered, so it must not ----------------------
+mk_hyprctl '[{"address":"0x1","class":"org.gnome.Nautilus","mapped":true,"hidden":false,"monitor":0,"workspace":{"id":2},"at":[1600,0],"size":[1080,1920],"focusHistoryID":0}]'
+FULL="$(surfaces)"
+grep -q 'omarchy-bar' <<<"$FULL" \
+  && bad "a covered bar does not claim" "$FULL" \
+  || ok "a covered bar does not claim"
+
+# The point of dropping it: the window gets its WHOLE rect back instead of
+# being clipped to start below a strip it is drawing over.
+grep -qE '0x0 \+1920x1080  org\.gnome\.Nautilus' <<<"$FULL" \
+  && ok "so the fullscreen window claims the whole output, unclipped" \
+  || bad "so the fullscreen window claims the whole output, unclipped" "$FULL"
+
+# --- overlay draws above fullscreen and keeps its claim -------------------
+grep -q 'omarchy-osd' <<<"$FULL" \
+  && ok "a level-3 overlay still claims — it draws above fullscreen" \
+  || bad "a level-3 overlay still claims — it draws above fullscreen" "$FULL"
+
+echo
+echo "  $PASS passed, $FAIL failed"
+[[ $FAIL -eq 0 ]]

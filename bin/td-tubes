@@ -341,6 +341,26 @@ tubes_json() {
         | .value[]
         | select(.w > 0 and .h > 0)
         | . as $ly
+        # A LAYER NOBODY CAN SEE MUST NOT CLAIM. Level 2 is TOP, and Hyprland
+        # draws a fullscreen window over it -- but the layer stays mapped, so it
+        # is still listed here and used to still get a rect. The bar then owned
+        # a strip of a window it was not drawing on: that strip rendered flat
+        # through the bar identity map while the rest of the window bowed
+        # through its own, and the clip below carved the window tube to start
+        # underneath it. The result is a band of app chrome across the top of a
+        # bowed fullscreen window, photographed on DP-2.
+        #
+        # Geometric, not a fullscreen flag: a visible client that FULLY CONTAINS
+        # the layer rect is covering it, whatever Hyprland calls that state.
+        # Needs no monitor size and no transform, and it catches a full-output
+        # client that is not flagged fullscreen too. Level 3 is OVERLAY, which
+        # draws above fullscreen, so it keeps its claim.
+        | select($lvl == 3 or ([ $c[]
+            | select(.mapped and (.hidden | not))
+            | select(.monitor == $mo.id)
+            | select(.at[0] <= $ly.x and .at[1] <= $ly.y
+                     and (.at[0] + .size[0]) >= ($ly.x + $ly.w)
+                     and (.at[1] + .size[1]) >= ($ly.y + $ly.h)) ] | length) == 0)
         | (($ly.x - $mo.x) * $mo.scale) as $x0
         | (($ly.y - $mo.y) * $mo.scale) as $y0
         | ($x0 + $ly.w * $mo.scale)     as $x1
