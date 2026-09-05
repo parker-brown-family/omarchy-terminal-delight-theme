@@ -410,6 +410,18 @@ tubes_json() {
             # neighbouring map. It claims them flat instead. (No apostrophes in
             # here: this jq program is single-quoted and one would end it.)
             curv:  (if .class == "terminal-delight" then 0 else 1 end),
+            # The Hyprland address of this window, carried so a consumer can
+            # follow a SPECIFIC window across layout changes rather than guessing
+            # from a rect. The baker here never reads it — emit_block, cap and
+            # describe all pick named fields — so the shader block stays byte for
+            # byte the same. The omarchy-crt ignition watch keys its per-window
+            # power-on/off effects on it: socket2 events name the window that
+            # opened or closed by address, and matching that to a rect is how a
+            # closing window is animated without every sibling that reflowed
+            # reading as a death and a birth. Layers carry none: no address, no
+            # ignition. (No apostrophes in here: this jq program is single-quoted
+            # and one would end it.)
+            addr:  .address,
             fh: .focusHistoryID } ]
         | sort_by(.fh) ) as $client_tubes
     # Layers draw above windows, so they claim first — level 3 over level 2,
